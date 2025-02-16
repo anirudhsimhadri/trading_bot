@@ -17,7 +17,7 @@ Setup a telegram bot and get the token and chat id from BotFather
 
 ## Setup
 
-1. Create a virtual environment:
+3. Create a virtual environment:
 ```bash
 python -m venv venv
 source venv/bin/activate
@@ -25,12 +25,12 @@ deactivate  # Close the virtual environment after using
 rm -rf venv  # Remove the virtual environment if necessary
 ```
 
-2. Install dependencies:
+4. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Run the bot:
+5. Run the bot:
 ```bash
 python main.py
 ```
