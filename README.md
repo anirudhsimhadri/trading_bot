@@ -5,19 +5,15 @@ An automated trading bot for NQ futures that uses trend deviation strategy with 
 ## General Setup
 
 1. Bot Setup
-'''
+
 Setup a telegram bot and get the token and chat id from BotFather
-'''
 
 2. API Access
-'''
+
     1. Go to https://developer.tdameritrade.com/
     2. Create a developer account
     3. Create a new app to get your API key
     4. Set your callback URL to: http://localhost:8080
-'''
-
-
 
 ## Setup
 
