@@ -1,6 +1,6 @@
 from datetime import datetime
 import pytz
-from ..config import settings
+from config import settings
 
 def is_market_open():
     est = pytz.timezone('US/Eastern')

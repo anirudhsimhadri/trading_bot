@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Bot Control Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="bg-glow bg-glow-a"></div>
+  <div class="bg-glow bg-glow-b"></div>
+  <main class="container">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Control Center</p>
+        <h1>Multi-Symbol Trading Dashboard</h1>
+        <p class="subtitle">Monitor signals, risk, and backtest results in one place.</p>
+      </div>
+      <div class="hero-meta">
+        <span class="pill" id="mode-pill">Mode: -</span>
+        <span class="pill" id="cycle-pill">Cycles: 0</span>
+      </div>
+    </header>
+
+    <section class="grid stats-grid">
+      <article class="card stat">
+        <h3>Selected Symbol</h3>
+        <p id="selected-symbol">-</p>
+      </article>
+      <article class="card stat">
+        <h3>Signals Detected</h3>
+        <p id="signals-detected">0</p>
+      </article>
+      <article class="card stat">
+        <h3>Executions</h3>
+        <p id="executions">0</p>
+      </article>
+      <article class="card stat">
+        <h3>Errors</h3>
+        <p id="errors">0</p>
+      </article>
+    </section>
+
+    <section class="grid main-grid">
+      <article class="card">
+        <div class="card-header">
+          <h2>Symbol Scanner</h2>
+          <div class="inline-controls">
+            <select id="symbol-select"></select>
+            <button id="set-symbol-btn" class="btn">Set Active</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="scanner-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Signal</th>
+                <th>Score</th>
+                <th>Last Close</th>
+                <th>Rows</th>
+                <th>Stale (min)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Risk Controls</h2>
+        <div class="risk-grid">
+          <div>
+            <p class="label">Trades Today</p>
+            <p id="risk-trades" class="value">0</p>
+          </div>
+          <div>
+            <p class="label">Daily Realized PnL</p>
+            <p id="risk-pnl" class="value">0.00</p>
+          </div>
+          <div>
+            <p class="label">Consecutive Losses</p>
+            <p id="risk-losses" class="value">0</p>
+          </div>
+          <div>
+            <p class="label">Cooldown Until</p>
+            <p id="risk-cooldown" class="value">None</p>
+          </div>
+        </div>
+        <div class="meta-list">
+          <p id="risk-daily-limit">Daily Loss Limit: <strong>-</strong></p>
+          <p id="risk-trade-risk">Risk Per Trade: <strong>-</strong></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Paper Account Snapshot</h2>
+        <div class="risk-grid">
+          <div>
+            <p class="label">Cash (USDT)</p>
+            <p id="paper-cash" class="value">-</p>
+          </div>
+          <div>
+            <p class="label">Asset Qty</p>
+            <p id="paper-asset" class="value">-</p>
+          </div>
+          <div>
+            <p class="label">Avg Entry</p>
+            <p id="paper-entry" class="value">-</p>
+          </div>
+          <div>
+            <p class="label">Realized PnL Total</p>
+            <p id="paper-realized" class="value">-</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card backtest-card">
+        <div class="card-header">
+          <h2>Backtest Lab</h2>
+          <div class="inline-controls">
+            <input id="backtest-period" type="text" value="60d" />
+            <input id="backtest-timeframe" type="text" value="15m" />
+            <button id="run-backtest-btn" class="btn">Run Backtest</button>
+          </div>
+        </div>
+        <canvas id="equity-chart"></canvas>
+        <div class="backtest-metrics" id="backtest-metrics"></div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Recent Backtest Trades</h2>
+      <div class="table-wrap">
+        <table id="trades-table">
+          <thead>
+            <tr>
+              <th>Entry</th>
+              <th>Exit</th>
+              <th>Entry Px</th>
+              <th>Exit Px</th>
+              <th>Qty</th>
+              <th>PnL</th>
+              <th>Return %</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
+

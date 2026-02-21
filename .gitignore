@@ -18,6 +18,9 @@ __pycache__/
 dist/
 build/
 *.egg-info/ 
+release/*.zip
+data/
+data_test/
 
 # Backup zip files
 backup_trading_bot.zip
