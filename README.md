@@ -44,6 +44,50 @@ BOT_MODE=paper REQUIRE_MARKET_HOURS=false SYMBOLS=BTC-USD,ETH-USD ACTIVE_SYMBOL=
 Open:
 - [http://localhost:5001](http://localhost:5001)
 
+## Fiverr Client Experience (Recommended Flow)
+
+Use this exact flow for the easiest buyer experience:
+
+1. Open terminal in project folder.
+2. Run:
+
+```bash
+./install_and_run.sh
+```
+
+3. In prompts:
+   - Mode: `paper`
+   - Symbols: `BTC-USD,ETH-USD`
+   - Active symbol: `BTC-USD`
+   - Require market hours: `false`
+   - Launch dashboard: `y`
+   - Run one cycle only: `y` (first check)
+
+4. Confirm success:
+   - You see startup logs and cycle status in terminal.
+   - Dashboard opens at [http://localhost:5001](http://localhost:5001).
+   - Scanner table and risk panel populate.
+
+5. Start continuous run:
+
+```bash
+./run.sh
+```
+
+Use the same settings, then select `Run one cycle only: n`.
+
+### What Buyers Can Interact With
+
+- Change active traded symbol from dashboard (`Set Active`).
+- Run backtests from dashboard (`Run Backtest`) with custom period/timeframe.
+- Monitor paper account, risk controls, and live scanner state.
+
+### Minimal Buyer Setup Promise
+
+- No brokerage connection is required for `paper` mode.
+- Telegram is optional.
+- Only Python + this folder are required.
+
 ## Modes
 
 - `signals`: alerts only

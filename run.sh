@@ -58,6 +58,20 @@ read_env_var() {
   echo "${val}"
 }
 
+is_yes() {
+  case "$1" in
+    [Yy]|[Yy][Ee][Ss]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_empty_or_yes() {
+  case "$1" in
+    ""|[Yy]|[Yy][Ee][Ss]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 echo "Select mode:"
 echo "  1) signals (alerts only)"
 echo "  2) paper (local paper account)"
@@ -136,7 +150,7 @@ import ccxt
 PY
   then
     read -r -p "ccxt is required for Binance mode. Install it now? [Y/n]: " install_ccxt_choice
-    if [[ -z "${install_ccxt_choice}" || "${install_ccxt_choice,,}" == "y" || "${install_ccxt_choice,,}" == "yes" ]]; then
+    if is_empty_or_yes "${install_ccxt_choice}"; then
       ./venv/bin/pip install ccxt
     else
       echo "Cannot continue in binance_testnet mode without ccxt."
@@ -175,14 +189,14 @@ set_env_var "TELEGRAM_TOKEN" "${tg_token:-$current_tg_token}"
 set_env_var "TELEGRAM_CHAT_ID" "${tg_chat:-$current_tg_chat}"
 
 read -r -p "Launch dashboard in background on http://localhost:5001 ? [y/N]: " launch_dashboard_choice
-if [[ "${launch_dashboard_choice,,}" == "y" || "${launch_dashboard_choice,,}" == "yes" ]]; then
+if is_yes "${launch_dashboard_choice}"; then
   echo "Starting dashboard in background..."
   "$PYTHON_BIN" dashboard/app.py >/tmp/trading_bot_dashboard.log 2>&1 &
   echo "Dashboard PID: $! (logs: /tmp/trading_bot_dashboard.log)"
 fi
 
 read -r -p "Run one cycle only? [y/N]: " run_once_choice
-if [[ "${run_once_choice,,}" == "y" || "${run_once_choice,,}" == "yes" ]]; then
+if is_yes "${run_once_choice}"; then
   echo "Starting bot in one-cycle mode..."
   "$PYTHON_BIN" main.py --once
 else
