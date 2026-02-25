@@ -82,6 +82,39 @@ def _get_selected_symbol(runtime_state: dict, symbols: list[str]) -> str:
     return selected
 
 
+def _get_bias(runtime_state: dict, symbol: str) -> float:
+    learning = runtime_state.setdefault("learning", {})
+    return float(learning.get(symbol, 0.0))
+
+
+def _update_bias(runtime_state: dict, symbol: str, realized_pnl: float | None, lr: float = 0.2) -> float:
+    if realized_pnl is None:
+        return _get_bias(runtime_state, symbol)
+    learning = runtime_state.setdefault("learning", {})
+    bias = float(learning.get(symbol, 0.0))
+    delta = lr if realized_pnl > 0 else -lr
+    bias = max(-1.5, min(1.5, bias + delta))
+    learning[symbol] = bias
+    return bias
+
+
+def _log_learning_event(state_dir: str, symbol: str, signal: dict, pnl: float | None, bias_before: float, bias_after: float):
+    path = Path(state_dir) / "learn_log.csv"
+    header = (
+        "timestamp,symbol,type,score,adj_score,price,rsi,adx,pnl,bias_before,bias_after\n"
+    )
+    line = (
+        f"{signal['timestamp']},{symbol},{signal['type']},"
+        f"{signal.get('score', '')},{signal.get('score', '') + bias_before},"
+        f"{signal.get('price', '')},{signal.get('rsi', '')},{signal.get('adx', '')},"
+        f"{pnl if pnl is not None else ''},{bias_before},{bias_after}\n"
+    )
+    if not path.exists():
+        path.write_text(header, encoding="utf-8")
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+
 def run_bot(run_once: bool = False) -> None:
     config_warnings = settings.validate_settings()
     for warning in config_warnings:
@@ -177,6 +210,19 @@ def run_bot(run_once: bool = False) -> None:
                 )
 
                 if selected_signal:
+                    bias_before = _get_bias(runtime_state, selected_symbol)
+                    adjusted_score = selected_signal["score"] + bias_before
+                    if adjusted_score < settings.STRATEGY_MIN_SIGNAL_SCORE:
+                        print(
+                            f"[Cycle {cycle}] Skipping signal; adjusted score {adjusted_score:.2f} "
+                            f"< min {settings.STRATEGY_MIN_SIGNAL_SCORE}"
+                        )
+                        state_store.save(runtime_state)
+                        if run_once:
+                            return
+                        time.sleep(settings.CHECK_INTERVAL_SECONDS)
+                        continue
+
                     signal_key = (
                         f"{selected_symbol}::{selected_signal['timestamp']}::{selected_signal['type']}"
                     )
@@ -205,7 +251,26 @@ def run_bot(run_once: bool = False) -> None:
                                     runtime_state["executions_attempted"] = int(
                                         runtime_state.get("executions_attempted", 0)
                                     ) + 1
-                                    risk_manager.record_trade(runtime_state, exec_result.get("realized_pnl"))
+                                    realized = exec_result.get("realized_pnl")
+                                    risk_manager.record_trade(runtime_state, realized)
+                                    bias_after = _update_bias(runtime_state, selected_symbol, realized)
+                                    _log_learning_event(
+                                        settings.STATE_DIR,
+                                        selected_symbol,
+                                        selected_signal,
+                                        realized,
+                                        bias_before,
+                                        bias_after,
+                                    )
+                                else:
+                                    _log_learning_event(
+                                        settings.STATE_DIR,
+                                        selected_symbol,
+                                        selected_signal,
+                                        exec_result.get("realized_pnl"),
+                                        bias_before,
+                                        bias_before,
+                                    )
                             else:
                                 reason = blocked_reason or "Risk control blocked execution."
                                 print(f"[Cycle {cycle}] Execution blocked: {reason}")

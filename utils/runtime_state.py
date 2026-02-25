@@ -16,6 +16,7 @@ class RuntimeStateStore:
             "last_signal_key": None,
             "selected_symbol": None,
             "scanner": {},
+            "learning": {},
             "cycles": 0,
             "signals_detected": 0,
             "executions_attempted": 0,

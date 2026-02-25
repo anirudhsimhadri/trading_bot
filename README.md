@@ -6,6 +6,7 @@ This bot now includes:
 - Multi-symbol scanner with active-symbol selection
 - Backtesting engine (for internal testing)
 - Web dashboard for monitoring + symbol switch + backtest visualization
+- Lightweight self-learning bias: the bot nudges signal scores up/down per symbol based on realized PnL to favor conditions that worked and dampen ones that didn’t (logged in `data/learn_log.csv`).
 
 Optional dependency for Binance mode only:
 - `ccxt` (install with `./venv/bin/pip install ccxt`)
@@ -175,6 +176,7 @@ The dashboard shows:
 - Risk block (trades today, realized PnL, cooldown, loss streak)
 - Paper account snapshot
 - Backtest metrics + equity chart + trade table
+- Learning log: `data/learn_log.csv` captures signals, scores, outcomes, and bias adjustments per symbol.
 
 ## Build Fiverr Zip
 
