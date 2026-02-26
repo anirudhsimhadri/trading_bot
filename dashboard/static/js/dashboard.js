@@ -96,6 +96,10 @@ function renderBacktest(backtest) {
     ["Win Rate %", num(metrics.win_rate_pct, 2)],
     ["Profit Factor", num(metrics.profit_factor, 2)],
   ];
+  if ((metrics.validation_mode || "") === "walk_forward") {
+    metricMap.push(["WF Splits", metrics.splits ?? 0]);
+    metricMap.push(["WF Pass %", num(metrics.split_pass_rate_pct, 2)]);
+  }
 
   metricMap.forEach(([k, v]) => {
     const div = document.createElement("div");
@@ -204,8 +208,32 @@ async function runBacktest() {
   }
 }
 
+async function runWalkForward() {
+  const symbol = document.getElementById("symbol-select").value;
+  const period = document.getElementById("backtest-period").value || "6mo";
+  const timeframe = document.getElementById("backtest-timeframe").value || "15m";
+  const btn = document.getElementById("run-wf-btn");
+  btn.disabled = true;
+  btn.textContent = "Running...";
+  try {
+    const res = await fetch("/api/walkforward", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, period, timeframe }),
+    });
+    const payload = await res.json();
+    if (payload.ok) {
+      renderBacktest(payload.result);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Run Walk-Forward";
+  }
+}
+
 document.getElementById("set-symbol-btn").addEventListener("click", setSelectedSymbol);
 document.getElementById("run-backtest-btn").addEventListener("click", runBacktest);
+document.getElementById("run-wf-btn").addEventListener("click", runWalkForward);
 
 refreshStatus();
 setInterval(refreshStatus, 15000);

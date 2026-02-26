@@ -55,7 +55,12 @@ class BinanceTestnetExecutor:
             "equity_usdt": equity,
         }
 
-    def execute_signal(self, signal: Dict[str, Any], order_size_usdt: float | None = None) -> Dict[str, Any]:
+    def execute_signal(
+        self,
+        signal: Dict[str, Any],
+        order_size_usdt: float | None = None,
+        close_position: bool = False,
+    ) -> Dict[str, Any]:
         signal_type = signal["type"].upper()
         side = "buy" if signal_type == "LONG" else "sell"
         size = self.order_size_usdt if order_size_usdt is None else float(order_size_usdt)
@@ -65,7 +70,23 @@ class BinanceTestnetExecutor:
         if not price:
             raise RuntimeError(f"Unable to determine price for {self.symbol}.")
 
-        raw_qty = size / float(price)
+        if side == "sell" and close_position:
+            balance = self.exchange.fetch_balance()
+            base, _ = self.symbol.split("/")
+            raw_qty = float(balance.get(base, {}).get("free", 0.0))
+            if raw_qty <= 0:
+                return {
+                    "executed": False,
+                    "side": side.upper(),
+                    "qty": 0.0,
+                    "notional_usdt": 0.0,
+                    "price": float(price),
+                    "realized_pnl": None,
+                    "message": f"Binance testnet SELL skipped | no free {base} balance.",
+                }
+        else:
+            raw_qty = size / float(price)
+
         qty = float(self.exchange.amount_to_precision(self.symbol, raw_qty))
         if qty <= 0:
             raise ValueError(
@@ -74,11 +95,12 @@ class BinanceTestnetExecutor:
 
         order = self.exchange.create_market_order(self.symbol, side, qty)
         order_id = order.get("id", "unknown")
+        notional = float(qty) * float(price)
         return {
             "executed": True,
             "side": side.upper(),
             "qty": qty,
-            "notional_usdt": size,
+            "notional_usdt": notional,
             "price": float(price),
             "realized_pnl": None,
             "message": (

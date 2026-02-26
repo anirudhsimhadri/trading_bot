@@ -6,7 +6,12 @@ This bot now includes:
 - Multi-symbol scanner with active-symbol selection
 - Backtesting engine (for internal testing)
 - Web dashboard for monitoring + symbol switch + backtest visualization
-- Lightweight self-learning bias: the bot nudges signal scores up/down per symbol based on realized PnL to favor conditions that worked and dampen ones that didn’t (logged in `data/learn_log.csv`).
+- Adaptive learning: symbol bias + confluence feature weights are adjusted from realized outcomes (logged in `data/learn_log.csv`).
+- Walk-forward preflight gate: execution can be blocked unless out-of-sample validation passes.
+- Realistic backtesting assumptions: spread, slippage, order latency, partial fill factor.
+- Protective exits: stop loss, take profit, trailing stop, and max-hold controls.
+- Stale-data protection + indicator warmup gate to avoid trading on incomplete/low-quality inputs.
+- Position-scaling guard (disabled by default) to avoid repeated entries while a position is already open.
 
 Optional dependency for Binance mode only:
 - `ccxt` (install with `./venv/bin/pip install ccxt`)
@@ -81,6 +86,7 @@ Use the same settings, then select `Run one cycle only: n`.
 
 - Change active traded symbol from dashboard (`Set Active`).
 - Run backtests from dashboard (`Run Backtest`) with custom period/timeframe.
+- Run out-of-sample validation from dashboard (`Run Walk-Forward`).
 - Monitor paper account, risk controls, and live scanner state.
 
 ### Minimal Buyer Setup Promise
@@ -120,11 +126,41 @@ MAX_TRADE_RISK_PCT=1
 MAX_TRADES_PER_DAY=6
 COOLDOWN_AFTER_LOSS_MINUTES=30
 MAX_CONSECUTIVE_LOSSES=3
+DATA_STALE_AFTER_MINUTES=240
+MIN_SIGNAL_WARMUP_BARS=220
+ALLOW_POSITION_SCALING=false
+STOP_LOSS_PCT=0.02
+TAKE_PROFIT_PCT=0.04
+TRAILING_STOP_PCT=0.015
+MAX_HOLD_BARS=96
 ```
 
 The bot blocks execution when limits are hit.
 Risk rationale and references are in:
 - `docs/risk_guidelines.md`
+
+Backtest gate settings:
+
+```env
+REQUIRE_BACKTEST_PASS=true
+BACKTEST_LOOKBACK_PERIOD=6mo
+BACKTEST_MIN_TRADES=20
+BACKTEST_MIN_WIN_RATE_PCT=45
+BACKTEST_MIN_PROFIT_FACTOR=1.1
+USE_WALK_FORWARD_PRECHECK=true
+WALK_FORWARD_SPLITS=4
+WALK_FORWARD_MIN_BARS_PER_SPLIT=120
+WALK_FORWARD_MIN_TRADES=8
+WALK_FORWARD_MIN_WIN_RATE_PCT=42
+WALK_FORWARD_MIN_PROFIT_FACTOR=1.05
+BACKTEST_SPREAD_BPS=2
+BACKTEST_SLIPPAGE_BPS=2
+BACKTEST_LATENCY_BARS=1
+BACKTEST_PARTIAL_FILL_PCT=1.0
+SYMBOL_LEARNING_RATE=0.2
+FEATURE_LEARNING_RATE=0.06
+FEATURE_WEIGHT_CLAMP=0.5
+```
 
 For `binance_testnet` mode, install `ccxt` first:
 
@@ -144,6 +180,14 @@ API:
 curl -X POST http://localhost:5001/api/backtest \
   -H "Content-Type: application/json" \
   -d '{"symbol":"BTC-USD","period":"60d","timeframe":"15m"}'
+```
+
+Walk-forward API:
+
+```bash
+curl -X POST http://localhost:5001/api/walkforward \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"BTC-USD","period":"6mo","timeframe":"15m"}'
 ```
 
 ## Terminal Output You Should See
@@ -176,7 +220,7 @@ The dashboard shows:
 - Risk block (trades today, realized PnL, cooldown, loss streak)
 - Paper account snapshot
 - Backtest metrics + equity chart + trade table
-- Learning log: `data/learn_log.csv` captures signals, scores, outcomes, and bias adjustments per symbol.
+- Learning log: `data/learn_log.csv` captures signals, adjusted score, active features, and bias updates.
 
 ## Build Fiverr Zip
 

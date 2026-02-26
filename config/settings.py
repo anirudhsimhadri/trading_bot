@@ -47,6 +47,9 @@ REQUIRE_MARKET_HOURS = _get_bool("REQUIRE_MARKET_HOURS", True)
 STATE_DIR = os.getenv("STATE_DIR", "data")
 HEARTBEAT_CYCLES = _get_int("HEARTBEAT_CYCLES", 12)
 DATA_STALE_AFTER_MINUTES = _get_int("DATA_STALE_AFTER_MINUTES", 240)
+USE_LAST_CLOSED_CANDLE = _get_bool("USE_LAST_CLOSED_CANDLE", True)
+MIN_SIGNAL_WARMUP_BARS = _get_int("MIN_SIGNAL_WARMUP_BARS", 220)
+ALLOW_POSITION_SCALING = _get_bool("ALLOW_POSITION_SCALING", False)
 
 # Notification configuration
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -86,10 +89,37 @@ POSITION_SIZE = _get_float("POSITION_SIZE", 1)
 MAX_POSITIONS = _get_int("MAX_POSITIONS", 5)
 STOP_LOSS_PCT = _get_float("STOP_LOSS_PCT", 0.02)
 TAKE_PROFIT_PCT = _get_float("TAKE_PROFIT_PCT", 0.04)
+TRAILING_STOP_PCT = _get_float("TRAILING_STOP_PCT", 0.015)
+MAX_HOLD_BARS = _get_int("MAX_HOLD_BARS", 96)
 
 # Backtesting parameters
 INITIAL_CAPITAL = 100000  # $100,000 initial capital
 COMMISSION_PCT = 0.001  # 0.1% commission per trade
+BACKTEST_SPREAD_BPS = _get_float("BACKTEST_SPREAD_BPS", 2.0)
+BACKTEST_SLIPPAGE_BPS = _get_float("BACKTEST_SLIPPAGE_BPS", 2.0)
+BACKTEST_LATENCY_BARS = _get_int("BACKTEST_LATENCY_BARS", 1)
+BACKTEST_PARTIAL_FILL_PCT = _get_float("BACKTEST_PARTIAL_FILL_PCT", 1.0)
+REQUIRE_BACKTEST_PASS = _get_bool("REQUIRE_BACKTEST_PASS", True)
+BACKTEST_LOOKBACK_PERIOD = os.getenv("BACKTEST_LOOKBACK_PERIOD", "6mo")
+BACKTEST_MIN_TRADES = _get_int("BACKTEST_MIN_TRADES", 20)
+BACKTEST_MIN_WIN_RATE_PCT = _get_float("BACKTEST_MIN_WIN_RATE_PCT", 45.0)
+BACKTEST_MIN_PROFIT_FACTOR = _get_float("BACKTEST_MIN_PROFIT_FACTOR", 1.1)
+USE_WALK_FORWARD_PRECHECK = _get_bool("USE_WALK_FORWARD_PRECHECK", True)
+WALK_FORWARD_SPLITS = _get_int("WALK_FORWARD_SPLITS", 4)
+WALK_FORWARD_MIN_BARS_PER_SPLIT = _get_int("WALK_FORWARD_MIN_BARS_PER_SPLIT", 120)
+WALK_FORWARD_MIN_TRADES = _get_int("WALK_FORWARD_MIN_TRADES", 8)
+WALK_FORWARD_MIN_WIN_RATE_PCT = _get_float("WALK_FORWARD_MIN_WIN_RATE_PCT", 42.0)
+WALK_FORWARD_MIN_PROFIT_FACTOR = _get_float("WALK_FORWARD_MIN_PROFIT_FACTOR", 1.05)
+
+# Data quality controls
+MAX_MISSING_BARS_PCT = _get_float("MAX_MISSING_BARS_PCT", 5.0)
+MAX_ALLOWED_GAP_MULTIPLIER = _get_float("MAX_ALLOWED_GAP_MULTIPLIER", 3.5)
+MAX_ZERO_VOLUME_PCT = _get_float("MAX_ZERO_VOLUME_PCT", 20.0)
+
+# Adaptive learning controls
+SYMBOL_LEARNING_RATE = _get_float("SYMBOL_LEARNING_RATE", 0.2)
+FEATURE_LEARNING_RATE = _get_float("FEATURE_LEARNING_RATE", 0.06)
+FEATURE_WEIGHT_CLAMP = _get_float("FEATURE_WEIGHT_CLAMP", 0.5)
 
 # Paper trading configuration
 PAPER_INITIAL_BALANCE_USDT = _get_float("PAPER_INITIAL_BALANCE_USDT", 10000.0)
@@ -123,6 +153,20 @@ def validate_settings() -> list[str]:
         raise ValueError("HEARTBEAT_CYCLES must be >= 0.")
     if DATA_STALE_AFTER_MINUTES < 1:
         raise ValueError("DATA_STALE_AFTER_MINUTES must be >= 1.")
+    if not isinstance(USE_LAST_CLOSED_CANDLE, bool):
+        raise ValueError("USE_LAST_CLOSED_CANDLE must be a boolean.")
+    if MIN_SIGNAL_WARMUP_BARS < 50:
+        raise ValueError("MIN_SIGNAL_WARMUP_BARS must be >= 50.")
+    if not isinstance(ALLOW_POSITION_SCALING, bool):
+        raise ValueError("ALLOW_POSITION_SCALING must be a boolean.")
+    if STOP_LOSS_PCT <= 0 or STOP_LOSS_PCT >= 0.5:
+        raise ValueError("STOP_LOSS_PCT must be > 0 and < 0.5.")
+    if TAKE_PROFIT_PCT <= 0 or TAKE_PROFIT_PCT >= 1.0:
+        raise ValueError("TAKE_PROFIT_PCT must be > 0 and < 1.")
+    if TRAILING_STOP_PCT < 0 or TRAILING_STOP_PCT >= 0.5:
+        raise ValueError("TRAILING_STOP_PCT must be >= 0 and < 0.5.")
+    if MAX_HOLD_BARS < 1:
+        raise ValueError("MAX_HOLD_BARS must be >= 1.")
     if PAPER_INITIAL_BALANCE_USDT <= 0:
         raise ValueError("PAPER_INITIAL_BALANCE_USDT must be > 0.")
     if PAPER_ORDER_SIZE_USDT <= 0:
@@ -143,6 +187,42 @@ def validate_settings() -> list[str]:
         raise ValueError("COOLDOWN_AFTER_LOSS_MINUTES must be >= 0.")
     if MAX_CONSECUTIVE_LOSSES < 1:
         raise ValueError("MAX_CONSECUTIVE_LOSSES must be >= 1.")
+    if BACKTEST_MIN_TRADES < 1:
+        raise ValueError("BACKTEST_MIN_TRADES must be >= 1.")
+    if BACKTEST_MIN_WIN_RATE_PCT < 0 or BACKTEST_MIN_WIN_RATE_PCT > 100:
+        raise ValueError("BACKTEST_MIN_WIN_RATE_PCT must be between 0 and 100.")
+    if BACKTEST_MIN_PROFIT_FACTOR <= 0:
+        raise ValueError("BACKTEST_MIN_PROFIT_FACTOR must be > 0.")
+    if BACKTEST_SPREAD_BPS < 0 or BACKTEST_SPREAD_BPS > 100:
+        raise ValueError("BACKTEST_SPREAD_BPS must be between 0 and 100.")
+    if BACKTEST_SLIPPAGE_BPS < 0 or BACKTEST_SLIPPAGE_BPS > 100:
+        raise ValueError("BACKTEST_SLIPPAGE_BPS must be between 0 and 100.")
+    if BACKTEST_LATENCY_BARS < 0 or BACKTEST_LATENCY_BARS > 10:
+        raise ValueError("BACKTEST_LATENCY_BARS must be between 0 and 10.")
+    if BACKTEST_PARTIAL_FILL_PCT <= 0 or BACKTEST_PARTIAL_FILL_PCT > 1:
+        raise ValueError("BACKTEST_PARTIAL_FILL_PCT must be > 0 and <= 1.")
+    if WALK_FORWARD_SPLITS < 2:
+        raise ValueError("WALK_FORWARD_SPLITS must be >= 2.")
+    if WALK_FORWARD_MIN_BARS_PER_SPLIT < 30:
+        raise ValueError("WALK_FORWARD_MIN_BARS_PER_SPLIT must be >= 30.")
+    if WALK_FORWARD_MIN_TRADES < 1:
+        raise ValueError("WALK_FORWARD_MIN_TRADES must be >= 1.")
+    if WALK_FORWARD_MIN_WIN_RATE_PCT < 0 or WALK_FORWARD_MIN_WIN_RATE_PCT > 100:
+        raise ValueError("WALK_FORWARD_MIN_WIN_RATE_PCT must be between 0 and 100.")
+    if WALK_FORWARD_MIN_PROFIT_FACTOR <= 0:
+        raise ValueError("WALK_FORWARD_MIN_PROFIT_FACTOR must be > 0.")
+    if MAX_MISSING_BARS_PCT < 0 or MAX_MISSING_BARS_PCT > 50:
+        raise ValueError("MAX_MISSING_BARS_PCT must be between 0 and 50.")
+    if MAX_ALLOWED_GAP_MULTIPLIER < 1.0 or MAX_ALLOWED_GAP_MULTIPLIER > 20:
+        raise ValueError("MAX_ALLOWED_GAP_MULTIPLIER must be between 1 and 20.")
+    if MAX_ZERO_VOLUME_PCT < 0 or MAX_ZERO_VOLUME_PCT > 100:
+        raise ValueError("MAX_ZERO_VOLUME_PCT must be between 0 and 100.")
+    if SYMBOL_LEARNING_RATE < 0 or SYMBOL_LEARNING_RATE > 1:
+        raise ValueError("SYMBOL_LEARNING_RATE must be between 0 and 1.")
+    if FEATURE_LEARNING_RATE < 0 or FEATURE_LEARNING_RATE > 1:
+        raise ValueError("FEATURE_LEARNING_RATE must be between 0 and 1.")
+    if FEATURE_WEIGHT_CLAMP <= 0 or FEATURE_WEIGHT_CLAMP > 5:
+        raise ValueError("FEATURE_WEIGHT_CLAMP must be > 0 and <= 5.")
 
     if bool(TELEGRAM_TOKEN) != bool(TELEGRAM_CHAT_ID):
         warnings.append(

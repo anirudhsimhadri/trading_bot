@@ -55,16 +55,3 @@ class TechnicalIndicators:
 
         return df
 
-    def fibonacci_ratios(high, low):
-        diff = high - low
-        ratios = {
-            "0": high - diff * 0,
-            "0.382": high - diff * 0.382,
-            "0.5": high - diff * 0.5,    # Golden Zone
-            "0.618": high - diff * 0.618, # Golden Zone
-            "-0.382": high - diff * -0.382,
-            "-0.618": high - diff * -0.618,
-            "1": high - diff * 1,
-            "-1.618": high - diff * -1.618,
-        }
-        return ratios

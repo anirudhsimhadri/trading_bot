@@ -14,17 +14,21 @@ class PaperTradeExecutor:
         self.initial_balance_usdt = initial_balance_usdt
         self._ensure_state()
 
+    def _default_state(self) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        return {
+            "cash_usdt": self.initial_balance_usdt,
+            "asset_qty": 0.0,
+            "avg_entry_price": 0.0,
+            "realized_pnl_total": 0.0,
+            "created_at_utc": now,
+            "updated_at_utc": now,
+        }
+
     def _ensure_state(self) -> None:
         os.makedirs(self.state_dir, exist_ok=True)
         if not os.path.exists(self.state_file):
-            state = {
-                "cash_usdt": self.initial_balance_usdt,
-                "asset_qty": 0.0,
-                "avg_entry_price": 0.0,
-                "realized_pnl_total": 0.0,
-                "created_at_utc": datetime.now(timezone.utc).isoformat(),
-                "updated_at_utc": datetime.now(timezone.utc).isoformat(),
-            }
+            state = self._default_state()
             self._save_state(state)
 
         if not os.path.exists(self.trade_log_file):
@@ -43,8 +47,20 @@ class PaperTradeExecutor:
                 )
 
     def _load_state(self) -> Dict[str, Any]:
-        with open(self.state_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+        defaults = self._default_state()
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            self._save_state(defaults)
+            return defaults
+
+        if not isinstance(state, dict):
+            self._save_state(defaults)
+            return defaults
+
+        defaults.update(state)
+        return defaults
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         state["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
@@ -79,7 +95,12 @@ class PaperTradeExecutor:
             "equity_usdt": float(equity),
         }
 
-    def execute_signal(self, signal: Dict[str, Any], order_size_usdt: float | None = None) -> Dict[str, Any]:
+    def execute_signal(
+        self,
+        signal: Dict[str, Any],
+        order_size_usdt: float | None = None,
+        close_position: bool = False,
+    ) -> Dict[str, Any]:
         price = float(signal["price"])
         signal_type = signal["type"].upper()
         state = self._load_state()
@@ -125,9 +146,14 @@ class PaperTradeExecutor:
                     "message": "Paper SELL skipped: no asset inventory to sell.",
                     "realized_pnl": None,
                 }
-            max_notional = float(state["asset_qty"]) * price
-            notional = min(size, max_notional)
-            qty = notional / price
+            max_qty = float(state["asset_qty"])
+            if close_position:
+                qty = max_qty
+                notional = qty * price
+            else:
+                max_notional = max_qty * price
+                notional = min(size, max_notional)
+                qty = notional / price
             avg_entry = float(state.get("avg_entry_price", 0.0))
             realized_pnl = (price - avg_entry) * qty
             state["cash_usdt"] += notional

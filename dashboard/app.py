@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from backtesting.engine import run_backtest
+from backtesting.engine import run_backtest, run_walk_forward_backtest
 from config import settings
 from utils.runtime_state import RuntimeStateStore
 
@@ -50,9 +50,12 @@ def _payload() -> dict:
         "runtime": runtime,
         "scanner": runtime.get("scanner", {}),
         "risk": runtime.get("risk", {}),
+        "positions": runtime.get("positions", {}),
+        "preflight": runtime.get("preflight", {}),
         "paper_state": paper_state,
         "last_error": runtime.get("last_error"),
         "backtest": runtime.get("backtest"),
+        "walkforward": runtime.get("walkforward"),
         "risk_config": {
             "MAX_DAILY_LOSS_PCT": settings.MAX_DAILY_LOSS_PCT,
             "MAX_TRADE_RISK_PCT": settings.MAX_TRADE_RISK_PCT,
@@ -118,6 +121,18 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             result = run_backtest(symbol=symbol, period=period, timeframe=timeframe)
             runtime = STATE_STORE.load()
             runtime["backtest"] = result
+            STATE_STORE.save(runtime)
+            self._send_json({"ok": True, "result": result})
+            return
+
+        if parsed.path == "/api/walkforward":
+            payload = _payload()
+            symbol = (body.get("symbol") or "").strip() or payload["selected_symbol"]
+            period = (body.get("period") or "").strip() or settings.BACKTEST_LOOKBACK_PERIOD
+            timeframe = (body.get("timeframe") or "").strip() or settings.TIMEFRAME
+            result = run_walk_forward_backtest(symbol=symbol, period=period, timeframe=timeframe)
+            runtime = STATE_STORE.load()
+            runtime["walkforward"] = result
             STATE_STORE.save(runtime)
             self._send_json({"ok": True, "result": result})
             return
