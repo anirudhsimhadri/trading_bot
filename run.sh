@@ -145,16 +145,27 @@ if [[ "$BOT_MODE" == "paper" ]]; then
 fi
 
 if [[ "$BOT_MODE" == "binance_testnet" ]]; then
+  fallback_setting="$(read_env_var "BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER")"
+  if [[ -z "$fallback_setting" ]]; then
+    set_env_var "BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER" "true"
+    fallback_setting="true"
+  fi
+  fallback_setting_normalized="$(printf '%s' "$fallback_setting" | tr '[:upper:]' '[:lower:]')"
+
   if ! "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
 import ccxt
 PY
   then
-    read -r -p "ccxt is required for Binance mode. Install it now? [Y/n]: " install_ccxt_choice
-    if is_empty_or_yes "${install_ccxt_choice}"; then
-      ./venv/bin/pip install ccxt
+    if [[ "$fallback_setting_normalized" == "true" ]]; then
+      echo "ccxt is not installed. Continuing with Binance mode + auto-fallback to paper."
     else
-      echo "Cannot continue in binance_testnet mode without ccxt."
-      exit 1
+      read -r -p "ccxt is required for Binance mode. Install it now? [Y/n]: " install_ccxt_choice
+      if is_empty_or_yes "${install_ccxt_choice}"; then
+        ./venv/bin/pip install ccxt
+      else
+        echo "Cannot continue in binance_testnet mode without ccxt when fallback is disabled."
+        exit 1
+      fi
     fi
   fi
 
@@ -179,6 +190,8 @@ PY
     echo "BINANCE_API_KEY and BINANCE_API_SECRET are required for binance_testnet mode."
     exit 1
   fi
+
+  echo "Binance fallback setting: BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=${fallback_setting}"
 fi
 
 current_tg_token="$(read_env_var "TELEGRAM_TOKEN")"

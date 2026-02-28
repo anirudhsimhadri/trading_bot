@@ -154,6 +154,7 @@ MAX_TRADE_RISK_PCT = _get_float("MAX_TRADE_RISK_PCT", 1.0)
 MAX_TRADES_PER_DAY = _get_int("MAX_TRADES_PER_DAY", 6)
 COOLDOWN_AFTER_LOSS_MINUTES = _get_int("COOLDOWN_AFTER_LOSS_MINUTES", 30)
 MAX_CONSECUTIVE_LOSSES = _get_int("MAX_CONSECUTIVE_LOSSES", 3)
+BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER = _get_bool("BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER", True)
 
 # Binance testnet configuration
 BINANCE_API_KEY = _get_optional_secret("BINANCE_API_KEY")
@@ -248,6 +249,8 @@ def validate_settings() -> list[str]:
         raise ValueError("COOLDOWN_AFTER_LOSS_MINUTES must be >= 0.")
     if MAX_CONSECUTIVE_LOSSES < 1:
         raise ValueError("MAX_CONSECUTIVE_LOSSES must be >= 1.")
+    if not isinstance(BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER, bool):
+        raise ValueError("BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER must be a boolean.")
     if BACKTEST_MIN_TRADES < 1:
         raise ValueError("BACKTEST_MIN_TRADES must be >= 1.")
     if BACKTEST_MIN_WIN_RATE_PCT < 0 or BACKTEST_MIN_WIN_RATE_PCT > 100:

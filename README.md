@@ -151,6 +151,12 @@ Use the same settings, then select `Run one cycle only: n`.
 - `binance_testnet`: paper-money orders via Binance Spot Testnet
 - `robinhood`: signal-only workflow
 
+If Binance testnet is blocked in your region (HTTP 451), the bot can auto-fallback to local paper execution:
+
+```env
+BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=true
+```
+
 ## Multi-Symbol Scanner
 
 Configure symbols in `.env`:
@@ -235,6 +241,9 @@ For `binance_testnet` mode, install `ccxt` first:
 ```bash
 ./venv/bin/pip install ccxt
 ```
+
+If Binance returns `restricted location` errors, keep using `paper` mode or leave
+`BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=true` so the app does not crash.
 
 ## Backtesting Engine (Internal Use)
 

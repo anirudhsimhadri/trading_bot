@@ -37,15 +37,34 @@ class BinanceTestnetExecutor:
             if private_api_url:
                 self.exchange.urls["api"]["private"] = private_api_url
 
-        self.exchange.load_markets()
+        try:
+            self.exchange.load_markets()
+        except Exception as exc:
+            message = str(exc)
+            lower_message = message.lower()
+            if "451" in message or "restricted location" in lower_message:
+                raise RuntimeError(
+                    "Binance testnet is unavailable from this location (HTTP 451 restricted location). "
+                    "Use paper mode or run from a supported region."
+                ) from exc
+            raise RuntimeError(
+                "Failed to initialize Binance testnet connection. "
+                "Check API keys, connectivity, and Binance testnet status."
+            ) from exc
 
     def get_account_snapshot(self, mark_price: float | None = None) -> Dict[str, Any]:
-        balance = self.exchange.fetch_balance()
+        try:
+            balance = self.exchange.fetch_balance()
+        except Exception as exc:
+            raise RuntimeError(f"Binance snapshot failed: {exc}") from exc
         base, quote = self.symbol.split("/")
         quote_free = float(balance.get(quote, {}).get("free", 0.0))
         base_free = float(balance.get(base, {}).get("free", 0.0))
         if mark_price is None:
-            ticker = self.exchange.fetch_ticker(self.symbol)
+            try:
+                ticker = self.exchange.fetch_ticker(self.symbol)
+            except Exception as exc:
+                raise RuntimeError(f"Binance ticker fetch failed: {exc}") from exc
             mark_price = ticker.get("last")
         mark_price = float(mark_price or 0.0)
         equity = quote_free + (base_free * mark_price)
@@ -65,13 +84,19 @@ class BinanceTestnetExecutor:
         side = "buy" if signal_type == "LONG" else "sell"
         size = self.order_size_usdt if order_size_usdt is None else float(order_size_usdt)
 
-        ticker = self.exchange.fetch_ticker(self.symbol)
+        try:
+            ticker = self.exchange.fetch_ticker(self.symbol)
+        except Exception as exc:
+            raise RuntimeError(f"Binance ticker fetch failed: {exc}") from exc
         price = ticker.get("last") or float(signal["price"])
         if not price:
             raise RuntimeError(f"Unable to determine price for {self.symbol}.")
 
         if side == "sell" and close_position:
-            balance = self.exchange.fetch_balance()
+            try:
+                balance = self.exchange.fetch_balance()
+            except Exception as exc:
+                raise RuntimeError(f"Binance balance fetch failed: {exc}") from exc
             base, _ = self.symbol.split("/")
             raw_qty = float(balance.get(base, {}).get("free", 0.0))
             if raw_qty <= 0:
@@ -93,7 +118,10 @@ class BinanceTestnetExecutor:
                 f"Computed quantity is 0 for {self.symbol}. Increase BINANCE_ORDER_SIZE_USDT."
             )
 
-        order = self.exchange.create_market_order(self.symbol, side, qty)
+        try:
+            order = self.exchange.create_market_order(self.symbol, side, qty)
+        except Exception as exc:
+            raise RuntimeError(f"Binance order placement failed: {exc}") from exc
         order_id = order.get("id", "unknown")
         notional = float(qty) * float(price)
         return {

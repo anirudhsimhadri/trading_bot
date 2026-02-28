@@ -60,16 +60,43 @@ def build_executor():
         )
 
     if settings.BOT_MODE == "binance_testnet":
-        return BinanceTestnetExecutor(
-            api_key=settings.BINANCE_API_KEY,
-            api_secret=settings.BINANCE_API_SECRET,
-            symbol=settings.BINANCE_SYMBOL,
-            order_size_usdt=settings.BINANCE_ORDER_SIZE_USDT,
-            public_api_url=settings.BINANCE_TESTNET_PUBLIC_API,
-            private_api_url=settings.BINANCE_TESTNET_PRIVATE_API,
-        )
+        try:
+            return BinanceTestnetExecutor(
+                api_key=settings.BINANCE_API_KEY,
+                api_secret=settings.BINANCE_API_SECRET,
+                symbol=settings.BINANCE_SYMBOL,
+                order_size_usdt=settings.BINANCE_ORDER_SIZE_USDT,
+                public_api_url=settings.BINANCE_TESTNET_PUBLIC_API,
+                private_api_url=settings.BINANCE_TESTNET_PRIVATE_API,
+            )
+        except Exception as exc:
+            if settings.BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER:
+                print(
+                    "Binance testnet unavailable. "
+                    "Falling back to local paper execution. "
+                    f"Reason: {exc}"
+                )
+                return PaperTradeExecutor(
+                    state_dir=settings.STATE_DIR,
+                    initial_balance_usdt=settings.PAPER_INITIAL_BALANCE_USDT,
+                    order_size_usdt=settings.PAPER_ORDER_SIZE_USDT,
+                )
+            raise RuntimeError(
+                "Failed to initialize binance_testnet executor. "
+                "Set BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=true to auto-fallback."
+            ) from exc
 
     raise ValueError(f"Unsupported BOT_MODE: {settings.BOT_MODE}")
+
+
+def _executor_label(executor) -> str:
+    if executor is None:
+        return "none"
+    if isinstance(executor, PaperTradeExecutor):
+        return "paper"
+    if isinstance(executor, BinanceTestnetExecutor):
+        return "binance_testnet"
+    return executor.__class__.__name__
 
 
 def _to_utc_datetime(value) -> Optional[datetime]:
@@ -430,7 +457,8 @@ def run_bot(run_once: bool = False) -> None:
 
     startup = (
         f"Bot started | mode={settings.BOT_MODE}, symbols={','.join(symbols)}, "
-        f"selected={selected_symbol}, timeframe={settings.TIMEFRAME}, period={settings.PERIOD}"
+        f"selected={selected_symbol}, timeframe={settings.TIMEFRAME}, period={settings.PERIOD}, "
+        f"execution={_executor_label(executor)}"
     )
     send_notification(telegram_client, startup)
     print(f"State file: {state_store.state_file}")
@@ -648,16 +676,23 @@ def run_bot(run_once: bool = False) -> None:
                                     else risk_manager.suggested_order_notional(equity, base_order_size)
                                 )
                                 try:
-                                    exec_result = executor.execute_signal(
-                                        trade_signal,
-                                        order_size_usdt=order_size,
-                                        close_position=close_position,
-                                    )
-                                except TypeError:
-                                    exec_result = executor.execute_signal(
-                                        trade_signal,
-                                        order_size_usdt=order_size,
-                                    )
+                                    try:
+                                        exec_result = executor.execute_signal(
+                                            trade_signal,
+                                            order_size_usdt=order_size,
+                                            close_position=close_position,
+                                        )
+                                    except TypeError:
+                                        exec_result = executor.execute_signal(
+                                            trade_signal,
+                                            order_size_usdt=order_size,
+                                        )
+                                except Exception as exec_exc:
+                                    exec_result = {
+                                        "executed": False,
+                                        "message": f"Execution error: {exec_exc}",
+                                        "realized_pnl": None,
+                                    }
 
                                 send_notification(telegram_client, exec_result["message"])
                                 if exec_result.get("executed"):
