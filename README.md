@@ -53,6 +53,51 @@ BOT_MODE=paper REQUIRE_MARKET_HOURS=false SYMBOLS=BTC-USD,ETH-USD ACTIVE_SYMBOL=
 Open:
 - [http://localhost:5001](http://localhost:5001)
 
+## Preflight Checklist (Run Before Live Session)
+
+Use this quick check to avoid startup hiccups:
+
+1. Verify dependencies and env file:
+
+```bash
+./install_and_run.sh
+```
+
+2. Keep first run simple in `.env`:
+   - `BOT_MODE=paper`
+   - `REQUIRE_MARKET_HOURS=false`
+   - `TELEGRAM_TOKEN=` and `TELEGRAM_CHAT_ID=` (leave blank unless you want alerts)
+   - Optional for first validation run: `REQUIRE_BACKTEST_PASS=false`
+
+3. Use symbols Yahoo supports reliably (examples):
+   - `BTC-USD`, `ETH-USD`, `SPY`, `QQQ`, `NQ=F`
+
+4. Run one cycle smoke test:
+
+```bash
+./venv/bin/python main.py --once
+```
+
+5. Confirm expected terminal output:
+   - `Bot started | ...`
+   - `State file: data/runtime_state.json`
+   - `[Cycle X] ... scanned=...`
+
+6. If you see `No data found for this date range`:
+   - Switch to a different symbol from the list above.
+   - Keep `TIMEFRAME=15m` and `PERIOD=60d` for first check.
+
+7. Start dashboard and verify interaction:
+
+```bash
+./venv/bin/python dashboard/app.py
+```
+
+Open [http://localhost:5001](http://localhost:5001), then confirm scanner rows and risk panel update.
+
+8. After all checks pass, enable stricter safety back:
+   - `REQUIRE_BACKTEST_PASS=true`
+
 ## Fiverr Client Experience (Recommended Flow)
 
 Use this exact flow for the easiest buyer experience:
