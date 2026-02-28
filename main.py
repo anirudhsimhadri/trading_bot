@@ -23,6 +23,16 @@ FEATURE_KEYS = (
     "volume",
     "band_bias",
     "rsi_slope",
+    "strategy_trend",
+    "strategy_mean_reversion",
+    "regime_trending",
+    "regime_choppy",
+    "regime_neutral",
+    "zscore_extreme",
+    "rsi_reversal",
+    "macd_reversal",
+    "below_midline",
+    "above_midline",
 )
 
 
@@ -326,11 +336,14 @@ def _log_learning_event(
     score = float(signal.get("score", 0.0))
     adj_score = score + float(bias_before) + float(feature_adj_before)
     features = ";".join(_signal_features(signal))
+    strategy_name = str(signal.get("strategy", "unknown"))
+    regime_name = str(signal.get("regime", "unknown"))
+    regime_conf = float(signal.get("regime_confidence", 0.0))
     header = (
-        "timestamp,symbol,type,score,adj_score,feature_adj,features,price,rsi,adx,pnl,bias_before,bias_after\n"
+        "timestamp,symbol,strategy,regime,regime_conf,type,score,adj_score,feature_adj,features,price,rsi,adx,pnl,bias_before,bias_after\n"
     )
     line = (
-        f"{signal['timestamp']},{symbol},{signal['type']},"
+        f"{signal['timestamp']},{symbol},{strategy_name},{regime_name},{regime_conf},{signal['type']},"
         f"{score},{adj_score},{feature_adj_before},{features},"
         f"{signal.get('price', '')},{signal.get('rsi', '')},{signal.get('adx', '')},"
         f"{pnl if pnl is not None else ''},{bias_before},{bias_after}\n"
@@ -499,6 +512,9 @@ def run_bot(run_once: bool = False) -> None:
                         "updated_at_utc": cycle_time,
                         "data_rows": int(len(df)),
                         "signal": None,
+                        "strategy": None,
+                        "regime": None,
+                        "regime_confidence": None,
                         "score": None,
                         "last_close": None,
                         "stale_minutes": None,
@@ -511,6 +527,9 @@ def run_bot(run_once: bool = False) -> None:
                         signal = strategy.generate_latest_signal(df)
                         if signal:
                             scan_row["signal"] = signal["type"]
+                            scan_row["strategy"] = signal.get("strategy")
+                            scan_row["regime"] = signal.get("regime")
+                            scan_row["regime_confidence"] = signal.get("regime_confidence")
                             scan_row["score"] = signal["score"]
                             active_signals += 1
 

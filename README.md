@@ -1,7 +1,10 @@
 # Trading Bot (Signals + Paper + Binance Testnet)
 
 This bot now includes:
-- Refined confluence strategy (trend + momentum + strength + volume filters)
+- Hybrid regime-switching strategy:
+  - Trend model in trending markets
+  - Mean reversion model in choppy/ranging markets
+  - Regime confirmation filter to avoid one-bar regime flips
 - Risk controls (daily loss cap, trade risk cap, max trades/day, cooldown, loss streak cap)
 - Multi-symbol scanner with active-symbol selection
 - Backtesting engine (for internal testing)
@@ -93,6 +96,7 @@ Use the same settings, then select `Run one cycle only: n`.
 
 - No brokerage connection is required for `paper` mode.
 - Telegram is optional.
+- Leave `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID` blank unless you want alerts.
 - Only Python + this folder are required.
 
 ## Modes
@@ -133,6 +137,25 @@ STOP_LOSS_PCT=0.02
 TAKE_PROFIT_PCT=0.04
 TRAILING_STOP_PCT=0.015
 MAX_HOLD_BARS=96
+```
+
+Regime + strategy settings:
+
+```env
+ALLOW_NEUTRAL_REGIME_TRADES=false
+REGIME_LOOKBACK_BARS=24
+REGIME_CONFIRM_BARS=2
+REGIME_TREND_ADX_HIGH=22
+REGIME_CHOPPY_ADX_LOW=16
+REGIME_TREND_EMA_GAP_PCT=0.0025
+REGIME_CHOPPY_EMA_GAP_PCT=0.0012
+REGIME_TREND_BANDWIDTH_PCT=0.018
+REGIME_CHOPPY_BANDWIDTH_PCT=0.012
+MEANREV_ZSCORE_ENTRY=1.1
+MEANREV_RSI_LONG_MAX=38
+MEANREV_RSI_SHORT_MIN=62
+MEANREV_MIN_VOLUME_MULTIPLIER=0.8
+MEANREV_MIN_SIGNAL_SCORE=4
 ```
 
 The bot blocks execution when limits are hit.
@@ -216,7 +239,7 @@ Heartbeat | cycles=24 | signals=2 | executions=1 | errors=0 | trades_today=1
 
 The dashboard shows:
 - Mode, cycles, selected symbol
-- Scanner table for all symbols (signal, score, stale data, price)
+- Scanner table for all symbols (model, regime, signal, score, stale data, price)
 - Risk block (trades today, realized PnL, cooldown, loss streak)
 - Paper account snapshot
 - Backtest metrics + equity chart + trade table

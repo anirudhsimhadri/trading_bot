@@ -26,7 +26,10 @@ class RiskManager:
 
     def current_equity(self, executor, mark_price: float | None) -> float | None:
         if executor and hasattr(executor, "get_account_snapshot"):
-            snapshot = executor.get_account_snapshot(mark_price)
+            try:
+                snapshot = executor.get_account_snapshot(mark_price)
+            except Exception:
+                return None
             if snapshot and isinstance(snapshot.get("equity_usdt"), (float, int)):
                 return float(snapshot["equity_usdt"])
         return None

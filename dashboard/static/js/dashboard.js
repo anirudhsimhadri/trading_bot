@@ -31,14 +31,28 @@ function renderScanner(scanner, selectedSymbol) {
     if (sym === selectedSymbol) tr.style.background = "rgba(22,195,160,0.12)";
 
     const signal = row.signal || "—";
+    const model = row.strategy || "—";
+    const regime = row.regime
+      ? `${row.regime} (${num(row.regime_confidence, 2)})`
+      : "—";
+    const hasClose =
+      row.last_close !== null &&
+      row.last_close !== undefined &&
+      !Number.isNaN(Number(row.last_close));
+    const hasStale =
+      row.stale_minutes !== null &&
+      row.stale_minutes !== undefined &&
+      !Number.isNaN(Number(row.stale_minutes));
     const signalColor = signal === "LONG" ? "positive" : signal === "SHORT" ? "negative" : "";
     tr.innerHTML = `
       <td>${sym}</td>
+      <td>${model}</td>
+      <td>${regime}</td>
       <td class="${signalColor}">${signal}</td>
       <td>${row.score ?? "—"}</td>
-      <td>${row.last_close ? num(row.last_close, 2) : "—"}</td>
+      <td>${hasClose ? num(row.last_close, 2) : "—"}</td>
       <td>${row.data_rows ?? 0}</td>
-      <td>${row.stale_minutes ? num(row.stale_minutes, 1) : "—"}</td>
+      <td>${hasStale ? num(row.stale_minutes, 1) : "—"}</td>
     `;
     body.appendChild(tr);
   });

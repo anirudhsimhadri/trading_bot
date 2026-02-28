@@ -182,6 +182,9 @@ class TrendDeviationStrategy:
         i: int,
         signal_type: str,
         score: int,
+        strategy_name: str,
+        regime: str,
+        regime_confidence: float,
         feature_flags: dict[str, bool],
     ) -> dict:
         return {
@@ -193,10 +196,68 @@ class TrendDeviationStrategy:
             "macd": float(df["MACD"].iloc[i]),
             "adx": float(df["ADX"].iloc[i]),
             "score": score,
+            "strategy": strategy_name,
+            "regime": regime,
+            "regime_confidence": regime_confidence,
             "features": [name for name, is_on in feature_flags.items() if is_on],
         }
 
-    def _evaluate_long_short(self, df: pd.DataFrame, i: int):
+    def _regime_context(self, df: pd.DataFrame, i: int) -> dict:
+        curr = df.iloc[i]
+        required = ["Close", "ADX", "EMA50", "EMA200", "Upper_Band", "Lower_Band"]
+        if any(pd.isna(curr.get(col)) for col in required):
+            return {"regime": "neutral", "confidence": 0.0}
+
+        close = float(curr["Close"])
+        if close <= 0:
+            return {"regime": "neutral", "confidence": 0.0}
+
+        lookback = max(5, int(settings.REGIME_LOOKBACK_BARS))
+        start = max(0, i - lookback + 1)
+        window = df.iloc[start : i + 1]
+        adx_now = float(curr["ADX"])
+        adx_avg = float(window["ADX"].dropna().mean()) if not window["ADX"].dropna().empty else adx_now
+        ema_gap = abs(float(curr["EMA50"]) - float(curr["EMA200"])) / close
+        band_width = max(float(curr["Upper_Band"]) - float(curr["Lower_Band"]), 0.0) / close
+
+        trend_score = sum(
+            [
+                adx_now >= float(settings.REGIME_TREND_ADX_HIGH),
+                ema_gap >= float(settings.REGIME_TREND_EMA_GAP_PCT),
+                band_width >= float(settings.REGIME_TREND_BANDWIDTH_PCT),
+                adx_now >= adx_avg,
+            ]
+        )
+        choppy_score = sum(
+            [
+                adx_now <= float(settings.REGIME_CHOPPY_ADX_LOW),
+                ema_gap <= float(settings.REGIME_CHOPPY_EMA_GAP_PCT),
+                band_width <= float(settings.REGIME_CHOPPY_BANDWIDTH_PCT),
+                adx_now <= adx_avg,
+            ]
+        )
+
+        if trend_score >= 3 and trend_score > choppy_score:
+            return {"regime": "trending", "confidence": float(trend_score) / 4.0}
+        if choppy_score >= 3 and choppy_score > trend_score:
+            return {"regime": "choppy", "confidence": float(choppy_score) / 4.0}
+        return {"regime": "neutral", "confidence": max(float(trend_score), float(choppy_score)) / 4.0}
+
+    def _regime_confirmed(self, df: pd.DataFrame, i: int, regime: str) -> bool:
+        if regime not in {"trending", "choppy"}:
+            return True
+
+        confirm_bars = max(1, int(settings.REGIME_CONFIRM_BARS))
+        start = i - confirm_bars + 1
+        if start < 1:
+            return False
+
+        for idx in range(start, i + 1):
+            if str(self._regime_context(df, idx).get("regime", "neutral")) != regime:
+                return False
+        return True
+
+    def _evaluate_trend_signal(self, df: pd.DataFrame, i: int, regime_ctx: dict):
         curr = df.iloc[i]
         prev = df.iloc[i - 1]
 
@@ -219,11 +280,17 @@ class TrendDeviationStrategy:
             return None
         if pd.isna(prev.get("RSI")):
             return None
+        regime = str(regime_ctx.get("regime", "neutral"))
+        regime_conf = float(regime_ctx.get("confidence", 0.0))
 
         # Regime filters
         uptrend = curr["EMA50"] > curr["EMA200"] and curr["Close"] > curr["EMA200"]
         downtrend = curr["EMA50"] < curr["EMA200"] and curr["Close"] < curr["EMA200"]
         adx_ok = curr["ADX"] >= settings.STRATEGY_MIN_ADX
+        if not adx_ok:
+            return None
+        if not (uptrend or downtrend):
+            return None
 
         # Pullback + momentum confirmation
         long_pullback = curr["Close"] <= curr["EMA20"] or curr["Close"] <= curr["SMA20"]
@@ -245,6 +312,8 @@ class TrendDeviationStrategy:
         short_rsi_slope = prev["RSI"] >= curr["RSI"]
 
         long_flags = {
+            "strategy_trend": True,
+            f"regime_{regime}": True,
             "trend": bool(uptrend),
             "adx": bool(adx_ok),
             "pullback": bool(long_pullback),
@@ -254,6 +323,8 @@ class TrendDeviationStrategy:
             "rsi_slope": bool(long_rsi_slope),
         }
         short_flags = {
+            "strategy_trend": True,
+            f"regime_{regime}": True,
             "trend": bool(downtrend),
             "adx": bool(adx_ok),
             "pullback": bool(short_pullback),
@@ -271,16 +342,178 @@ class TrendDeviationStrategy:
         )
 
         if long_score >= settings.STRATEGY_MIN_SIGNAL_SCORE and long_rsi_slope:
-            return self._signal_payload(df, i, "LONG", long_score, long_flags)
+            return self._signal_payload(
+                df,
+                i,
+                "LONG",
+                long_score,
+                "trend",
+                regime,
+                regime_conf,
+                long_flags,
+            )
         if short_score >= settings.STRATEGY_MIN_SIGNAL_SCORE and short_rsi_slope:
-            return self._signal_payload(df, i, "SHORT", short_score, short_flags)
+            return self._signal_payload(
+                df,
+                i,
+                "SHORT",
+                short_score,
+                "trend",
+                regime,
+                regime_conf,
+                short_flags,
+            )
         return None
+
+    def _evaluate_mean_reversion_signal(self, df: pd.DataFrame, i: int, regime_ctx: dict):
+        curr = df.iloc[i]
+        prev = df.iloc[i - 1]
+
+        required = [
+            "Close",
+            "SMA20",
+            "STD20",
+            "Upper_Band",
+            "Lower_Band",
+            "RSI",
+            "Volume",
+            "Volume_SMA20",
+            "ADX",
+            "MACD",
+            "MACD_Hist",
+        ]
+        if any(pd.isna(curr.get(col)) for col in required):
+            return None
+        if pd.isna(prev.get("RSI")):
+            return None
+        if pd.isna(prev.get("MACD_Hist")):
+            return None
+
+        regime = str(regime_ctx.get("regime", "neutral"))
+        regime_conf = float(regime_ctx.get("confidence", 0.0))
+        close = float(curr["Close"])
+        std20 = float(curr["STD20"])
+        sma20 = float(curr["SMA20"])
+        upper = float(curr["Upper_Band"])
+        lower = float(curr["Lower_Band"])
+        if close <= 0 or std20 <= 0:
+            return None
+
+        zscore = (close - sma20) / std20
+        vol_ok = curr["Volume"] >= (curr["Volume_SMA20"] * settings.MEANREV_MIN_VOLUME_MULTIPLIER)
+        long_extreme = close <= lower or zscore <= -float(settings.MEANREV_ZSCORE_ENTRY)
+        short_extreme = close >= upper or zscore >= float(settings.MEANREV_ZSCORE_ENTRY)
+        macd_reversal_long = curr["MACD_Hist"] >= prev["MACD_Hist"]
+        macd_reversal_short = curr["MACD_Hist"] <= prev["MACD_Hist"]
+        long_reversal = (
+            curr["RSI"] <= settings.MEANREV_RSI_LONG_MAX
+            and curr["RSI"] >= prev["RSI"]
+            and macd_reversal_long
+        )
+        short_reversal = (
+            curr["RSI"] >= settings.MEANREV_RSI_SHORT_MIN
+            and curr["RSI"] <= prev["RSI"]
+            and macd_reversal_short
+        )
+        long_location = close <= sma20
+        short_location = close >= sma20
+        low_adx = curr["ADX"] <= settings.REGIME_CHOPPY_ADX_LOW
+
+        long_flags = {
+            "strategy_mean_reversion": True,
+            f"regime_{regime}": True,
+            "zscore_extreme": bool(long_extreme),
+            "rsi_reversal": bool(long_reversal),
+            "macd_reversal": bool(macd_reversal_long),
+            "volume": bool(vol_ok),
+            "below_midline": bool(long_location),
+            "adx": bool(low_adx),
+        }
+        short_flags = {
+            "strategy_mean_reversion": True,
+            f"regime_{regime}": True,
+            "zscore_extreme": bool(short_extreme),
+            "rsi_reversal": bool(short_reversal),
+            "macd_reversal": bool(macd_reversal_short),
+            "volume": bool(vol_ok),
+            "above_midline": bool(short_location),
+            "adx": bool(low_adx),
+        }
+
+        long_core_ok = long_extreme and long_reversal and long_location and low_adx
+        short_core_ok = short_extreme and short_reversal and short_location and low_adx
+
+        long_score = sum(
+            [long_extreme, long_reversal, macd_reversal_long, vol_ok, long_location, zscore < 0, low_adx]
+        )
+        short_score = sum(
+            [short_extreme, short_reversal, macd_reversal_short, vol_ok, short_location, zscore > 0, low_adx]
+        )
+
+        if long_core_ok and long_score >= settings.MEANREV_MIN_SIGNAL_SCORE:
+            return self._signal_payload(
+                df,
+                i,
+                "LONG",
+                long_score,
+                "mean_reversion",
+                regime,
+                regime_conf,
+                long_flags,
+            )
+        if short_core_ok and short_score >= settings.MEANREV_MIN_SIGNAL_SCORE:
+            return self._signal_payload(
+                df,
+                i,
+                "SHORT",
+                short_score,
+                "mean_reversion",
+                regime,
+                regime_conf,
+                short_flags,
+            )
+        return None
+
+    def _evaluate_signal(self, df: pd.DataFrame, i: int):
+        regime_ctx = self._regime_context(df, i)
+        regime = str(regime_ctx.get("regime", "neutral"))
+        if not self._regime_confirmed(df, i, regime):
+            return None
+
+        trend_signal = None
+        mean_signal = None
+        if regime == "trending":
+            trend_signal = self._evaluate_trend_signal(df, i, regime_ctx)
+        elif regime == "choppy":
+            mean_signal = self._evaluate_mean_reversion_signal(df, i, regime_ctx)
+        elif settings.ALLOW_NEUTRAL_REGIME_TRADES:
+            trend_signal = self._evaluate_trend_signal(df, i, regime_ctx)
+            mean_signal = self._evaluate_mean_reversion_signal(df, i, regime_ctx)
+
+        if regime == "trending":
+            return trend_signal
+        if regime == "choppy":
+            return mean_signal
+        if not settings.ALLOW_NEUTRAL_REGIME_TRADES:
+            return None
+
+        candidates = [s for s in [trend_signal, mean_signal] if s]
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda s: (
+                float(s.get("score", 0.0)),
+                float(s.get("regime_confidence", 0.0)),
+            ),
+            reverse=True,
+        )
+        return candidates[0]
 
     def generate_signals(self, df: pd.DataFrame) -> list[dict]:
         signals: list[dict] = []
         start_i = max(1, settings.MIN_SIGNAL_WARMUP_BARS - 1)
         for i in range(start_i, len(df)):
-            signal = self._evaluate_long_short(df, i)
+            signal = self._evaluate_signal(df, i)
             if signal:
                 signals.append(signal)
         return signals
@@ -295,15 +528,17 @@ class TrendDeviationStrategy:
         if settings.USE_LAST_CLOSED_CANDLE:
             if len(df) < max(settings.MIN_SIGNAL_WARMUP_BARS, 3):
                 return None
-            return self._evaluate_long_short(df, len(df) - 2)
+            return self._evaluate_signal(df, len(df) - 2)
 
         if len(df) < max(settings.MIN_SIGNAL_WARMUP_BARS, 2):
             return None
-        return self._evaluate_long_short(df, len(df) - 1)
+        return self._evaluate_signal(df, len(df) - 1)
 
     def format_alert_message(self, signal: dict) -> str:
         return (
             f"🚨 {signal['symbol']} ALERT 🚨\n"
+            f"Model: {signal.get('strategy', 'unknown')} | Regime: {signal.get('regime', 'n/a')} "
+            f"({float(signal.get('regime_confidence', 0.0)):.2f})\n"
             f"Signal: {signal['type']} (score {signal['score']})\n"
             f"Time: {signal['timestamp']}\n"
             f"Price: ${signal['price']:.2f}\n"
