@@ -6,18 +6,18 @@ from typing import Dict, Any
 
 
 class PaperTradeExecutor:
-    def __init__(self, state_dir: str, initial_balance_usdt: float, order_size_usdt: float):
+    def __init__(self, state_dir: str, initial_balance_usd: float, order_size_usd: float):
         self.state_dir = state_dir
         self.state_file = os.path.join(state_dir, "paper_state.json")
         self.trade_log_file = os.path.join(state_dir, "paper_trades.csv")
-        self.order_size_usdt = order_size_usdt
-        self.initial_balance_usdt = initial_balance_usdt
+        self.order_size_usd = order_size_usd
+        self.initial_balance_usd = initial_balance_usd
         self._ensure_state()
 
     def _default_state(self) -> Dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         return {
-            "cash_usdt": self.initial_balance_usdt,
+            "cash_usd": self.initial_balance_usd,
             "asset_qty": 0.0,
             "avg_entry_price": 0.0,
             "realized_pnl_total": 0.0,
@@ -40,8 +40,8 @@ class PaperTradeExecutor:
                         "action",
                         "price",
                         "qty",
-                        "notional_usdt",
-                        "cash_usdt",
+                        "notional_usd",
+                        "cash_usd",
                         "asset_qty",
                     ]
                 )
@@ -58,6 +58,16 @@ class PaperTradeExecutor:
         if not isinstance(state, dict):
             self._save_state(defaults)
             return defaults
+
+        if "cash_usd" not in state:
+            legacy_cash = state.get("cash")
+            if not isinstance(legacy_cash, (int, float)):
+                for key, value in state.items():
+                    if str(key).startswith("cash_") and isinstance(value, (int, float)):
+                        legacy_cash = value
+                        break
+            if isinstance(legacy_cash, (int, float)):
+                state["cash_usd"] = float(legacy_cash)
 
         defaults.update(state)
         return defaults
@@ -77,7 +87,7 @@ class PaperTradeExecutor:
                     round(price, 8),
                     round(qty, 8),
                     round(notional, 8),
-                    round(state["cash_usdt"], 8),
+                    round(state["cash_usd"], 8),
                     round(state["asset_qty"], 8),
                 ]
             )
@@ -86,30 +96,30 @@ class PaperTradeExecutor:
         state = self._load_state()
         if mark_price is None:
             mark_price = state.get("avg_entry_price", 0.0)
-        equity = float(state["cash_usdt"]) + float(state["asset_qty"]) * float(mark_price or 0.0)
+        equity = float(state["cash_usd"]) + float(state["asset_qty"]) * float(mark_price or 0.0)
         return {
-            "cash_usdt": float(state["cash_usdt"]),
+            "cash_usd": float(state["cash_usd"]),
             "asset_qty": float(state["asset_qty"]),
             "avg_entry_price": float(state.get("avg_entry_price", 0.0)),
             "realized_pnl_total": float(state.get("realized_pnl_total", 0.0)),
-            "equity_usdt": float(equity),
+            "equity_usd": float(equity),
         }
 
     def execute_signal(
         self,
         signal: Dict[str, Any],
-        order_size_usdt: float | None = None,
+        order_size_usd: float | None = None,
         close_position: bool = False,
     ) -> Dict[str, Any]:
         price = float(signal["price"])
         signal_type = signal["type"].upper()
         state = self._load_state()
-        size = self.order_size_usdt if order_size_usdt is None else float(order_size_usdt)
+        size = self.order_size_usd if order_size_usd is None else float(order_size_usd)
 
         if signal_type == "LONG":
-            notional = min(size, float(state["cash_usdt"]))
+            notional = min(size, float(state["cash_usd"]))
             if notional <= 0:
-                return {"executed": False, "message": "Paper trade skipped: no USDT cash available.", "realized_pnl": None}
+                return {"executed": False, "message": "Paper trade skipped: no USD cash available.", "realized_pnl": None}
             qty = notional / price
 
             prev_qty = float(state["asset_qty"])
@@ -120,7 +130,7 @@ class PaperTradeExecutor:
             else:
                 weighted_avg = 0.0
 
-            state["cash_usdt"] -= notional
+            state["cash_usd"] -= notional
             state["asset_qty"] = new_qty
             state["avg_entry_price"] = weighted_avg
             action = "BUY"
@@ -130,12 +140,12 @@ class PaperTradeExecutor:
                 "executed": True,
                 "side": action,
                 "qty": qty,
-                "notional_usdt": notional,
+                "notional_usd": notional,
                 "price": price,
                 "realized_pnl": 0.0,
                 "message": (
                 f"Paper BUY filled | price={price:.2f}, qty={qty:.6f}, "
-                f"cash={state['cash_usdt']:.2f}, asset={state['asset_qty']:.6f}"
+                f"cash={state['cash_usd']:.2f}, asset={state['asset_qty']:.6f}"
                 ),
             }
 
@@ -156,7 +166,7 @@ class PaperTradeExecutor:
                 qty = notional / price
             avg_entry = float(state.get("avg_entry_price", 0.0))
             realized_pnl = (price - avg_entry) * qty
-            state["cash_usdt"] += notional
+            state["cash_usd"] += notional
             state["asset_qty"] -= qty
             if float(state["asset_qty"]) <= 1e-12:
                 state["asset_qty"] = 0.0
@@ -169,12 +179,12 @@ class PaperTradeExecutor:
                 "executed": True,
                 "side": action,
                 "qty": qty,
-                "notional_usdt": notional,
+                "notional_usd": notional,
                 "price": price,
                 "realized_pnl": realized_pnl,
                 "message": (
                 f"Paper SELL filled | price={price:.2f}, qty={qty:.6f}, "
-                f"cash={state['cash_usdt']:.2f}, asset={state['asset_qty']:.6f}, "
+                f"cash={state['cash_usd']:.2f}, asset={state['asset_qty']:.6f}, "
                 f"realized_pnl={realized_pnl:.2f}"
                 ),
             }

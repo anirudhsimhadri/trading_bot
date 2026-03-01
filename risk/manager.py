@@ -30,11 +30,16 @@ class RiskManager:
                 snapshot = executor.get_account_snapshot(mark_price)
             except Exception:
                 return None
-            if snapshot and isinstance(snapshot.get("equity_usdt"), (float, int)):
-                return float(snapshot["equity_usdt"])
+            if snapshot and isinstance(snapshot.get("equity_usd"), (float, int)):
+                return float(snapshot["equity_usd"])
         return None
 
-    def suggested_order_notional(self, equity: float | None, configured_order_size: float) -> float:
+    def suggested_order_notional(
+        self,
+        equity: float | None,
+        configured_order_size: float,
+        symbol: str | None = None,
+    ) -> float:
         if equity is None:
             return configured_order_size
         if 0 < settings.POSITION_SIZE <= 1:
@@ -43,13 +48,14 @@ class RiskManager:
             position_target = float(settings.POSITION_SIZE)
 
         desired_size = min(configured_order_size, position_target) if position_target > 0 else configured_order_size
-        capped = equity * (settings.MAX_TRADE_RISK_PCT / 100.0)
+        risk_pct = settings.max_trade_risk_pct_for_symbol(symbol or "")
+        capped = equity * (risk_pct / 100.0)
         if capped <= 0:
             return desired_size
         return min(desired_size, capped)
 
     def can_trade(self, runtime_state: Dict[str, Any], equity: float | None) -> Tuple[bool, str | None]:
-        effective_equity = equity if equity is not None else settings.PAPER_INITIAL_BALANCE_USDT
+        effective_equity = equity if equity is not None else settings.PAPER_INITIAL_BALANCE_USD
         risk = self._ensure_risk_state(runtime_state, effective_equity)
         now = datetime.now(timezone.utc)
 
@@ -85,7 +91,7 @@ class RiskManager:
         current_equity: float | None = None,
     ) -> None:
         effective_equity = (
-            current_equity if current_equity is not None else settings.PAPER_INITIAL_BALANCE_USDT
+            current_equity if current_equity is not None else settings.PAPER_INITIAL_BALANCE_USD
         )
         risk = self._ensure_risk_state(runtime_state, effective_equity)
         risk["trades_today"] = int(risk.get("trades_today", 0)) + 1

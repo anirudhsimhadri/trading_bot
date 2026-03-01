@@ -9,7 +9,10 @@ from indicators.technical_indicators import TechnicalIndicators
 class TrendDeviationStrategy:
     def __init__(self, symbol: str):
         self.symbol = symbol
+        self.security_type = settings.get_security_type(symbol)
+        self.profile = settings.strategy_profile(symbol)
         self.required_price_columns = ["Open", "High", "Low", "Close", "Volume"]
+        self._htf_direction_cache: dict | None = None
 
     def _fallback_period_for_interval(self, interval: str) -> str | None:
         intraday_limits = {
@@ -104,15 +107,66 @@ class TrendDeviationStrategy:
 
         if "Volume" in df.columns and len(df) > 0:
             zero_volume_pct = float((df["Volume"] <= 0).mean() * 100.0)
-            if zero_volume_pct > settings.MAX_ZERO_VOLUME_PCT:
+            max_zero_volume_pct = settings.max_zero_volume_pct_for_symbol(self.symbol)
+            if zero_volume_pct > max_zero_volume_pct:
                 print(
                     f"Data quality warning for {self.symbol}: "
                     f"zero-volume bars {zero_volume_pct:.2f}% exceeds "
-                    f"{settings.MAX_ZERO_VOLUME_PCT:.2f}%."
+                    f"{max_zero_volume_pct:.2f}%."
                 )
                 return pd.DataFrame()
 
         return df
+
+    def _build_higher_timeframe_cache(self, df: pd.DataFrame) -> dict:
+        if not settings.ENABLE_HIGHER_TIMEFRAME_CONFIRMATION:
+            return {}
+        if df.empty or "Close" not in df.columns:
+            return {}
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return {}
+
+        rule = str(settings.HIGHER_TIMEFRAME_RESAMPLE_RULE).strip()
+        if not rule:
+            return {}
+
+        close = pd.to_numeric(df["Close"], errors="coerce").dropna()
+        if close.empty:
+            return {}
+
+        htf_close = close.resample(rule).last().dropna()
+        if htf_close.empty:
+            return {}
+        if len(htf_close) < int(settings.HIGHER_TIMEFRAME_MIN_BARS):
+            return {}
+
+        ema_fast = htf_close.ewm(span=50, adjust=False).mean()
+        ema_slow = htf_close.ewm(span=200, adjust=False).mean()
+        direction = pd.Series("neutral", index=htf_close.index, dtype="object")
+        direction = direction.mask(ema_fast > ema_slow, "up")
+        direction = direction.mask(ema_fast < ema_slow, "down")
+        mapped = direction.reindex(df.index, method="ffill").fillna("neutral")
+        return mapped.to_dict()
+
+    def _higher_timeframe_direction(self, df: pd.DataFrame, i: int) -> str:
+        if not settings.ENABLE_HIGHER_TIMEFRAME_CONFIRMATION:
+            return "neutral"
+        if self._htf_direction_cache is None:
+            self._htf_direction_cache = self._build_higher_timeframe_cache(df)
+        if not self._htf_direction_cache:
+            return "neutral"
+        return str(self._htf_direction_cache.get(df.index[i], "neutral"))
+
+    def _volume_ok(self, curr, multiplier: float, allow_bypass: bool) -> bool:
+        volume = curr.get("Volume")
+        volume_sma = curr.get("Volume_SMA20")
+        if pd.isna(volume) or pd.isna(volume_sma):
+            return bool(allow_bypass)
+        volume = float(volume)
+        volume_sma = float(volume_sma)
+        if volume_sma <= 0:
+            return bool(allow_bypass)
+        return bool(volume >= (volume_sma * multiplier) or allow_bypass)
 
     def _download_data(self, period: str, timeframe: str) -> pd.DataFrame:
         retries = 3
@@ -195,6 +249,7 @@ class TrendDeviationStrategy:
             "rsi": float(df["RSI"].iloc[i]),
             "macd": float(df["MACD"].iloc[i]),
             "adx": float(df["ADX"].iloc[i]),
+            "atr": float(df["ATR"].iloc[i]) if "ATR" in df.columns and not pd.isna(df["ATR"].iloc[i]) else 0.0,
             "score": score,
             "strategy": strategy_name,
             "regime": regime,
@@ -260,6 +315,7 @@ class TrendDeviationStrategy:
     def _evaluate_trend_signal(self, df: pd.DataFrame, i: int, regime_ctx: dict):
         curr = df.iloc[i]
         prev = df.iloc[i - 1]
+        profile = self.profile
 
         required = [
             "Close",
@@ -286,26 +342,33 @@ class TrendDeviationStrategy:
         # Regime filters
         uptrend = curr["EMA50"] > curr["EMA200"] and curr["Close"] > curr["EMA200"]
         downtrend = curr["EMA50"] < curr["EMA200"] and curr["Close"] < curr["EMA200"]
-        adx_ok = curr["ADX"] >= settings.STRATEGY_MIN_ADX
+        adx_ok = curr["ADX"] >= float(profile["trend_min_adx"])
         if not adx_ok:
             return None
         if not (uptrend or downtrend):
             return None
+        htf_direction = self._higher_timeframe_direction(df, i)
+        htf_long_ok = (not settings.ENABLE_HIGHER_TIMEFRAME_CONFIRMATION) or htf_direction in {"up", "neutral"}
+        htf_short_ok = (not settings.ENABLE_HIGHER_TIMEFRAME_CONFIRMATION) or htf_direction in {"down", "neutral"}
 
         # Pullback + momentum confirmation
         long_pullback = curr["Close"] <= curr["EMA20"] or curr["Close"] <= curr["SMA20"]
         short_pullback = curr["Close"] >= curr["EMA20"] or curr["Close"] >= curr["SMA20"]
         long_momentum = (
             bool(curr["MACD_Cross_Up"])
-            and settings.RSI_OVERSOLD <= curr["RSI"] <= settings.STRATEGY_MAX_LONG_RSI
+            and settings.RSI_OVERSOLD <= curr["RSI"] <= float(profile["trend_max_long_rsi"])
         )
         short_momentum = (
             bool(curr["MACD_Cross_Down"])
-            and settings.STRATEGY_MIN_SHORT_RSI <= curr["RSI"] <= settings.RSI_OVERBOUGHT
+            and float(profile["trend_min_short_rsi"]) <= curr["RSI"] <= settings.RSI_OVERBOUGHT
         )
 
         # Vol/volume filters
-        vol_ok = curr["Volume"] >= (curr["Volume_SMA20"] * settings.STRATEGY_MIN_VOLUME_MULTIPLIER)
+        vol_ok = self._volume_ok(
+            curr,
+            float(profile["trend_min_volume_mult"]),
+            bool(profile["allow_volume_bypass"]),
+        )
         band_bias_long = curr["Close"] <= (curr["Upper_Band"] - (curr["Upper_Band"] - curr["Lower_Band"]) * 0.35)
         band_bias_short = curr["Close"] >= (curr["Lower_Band"] + (curr["Upper_Band"] - curr["Lower_Band"]) * 0.65)
         long_rsi_slope = prev["RSI"] <= curr["RSI"]
@@ -314,6 +377,7 @@ class TrendDeviationStrategy:
         long_flags = {
             "strategy_trend": True,
             f"regime_{regime}": True,
+            f"security_{self.security_type}": True,
             "trend": bool(uptrend),
             "adx": bool(adx_ok),
             "pullback": bool(long_pullback),
@@ -321,10 +385,12 @@ class TrendDeviationStrategy:
             "volume": bool(vol_ok),
             "band_bias": bool(band_bias_long),
             "rsi_slope": bool(long_rsi_slope),
+            "htf_confirm": bool(htf_long_ok),
         }
         short_flags = {
             "strategy_trend": True,
             f"regime_{regime}": True,
+            f"security_{self.security_type}": True,
             "trend": bool(downtrend),
             "adx": bool(adx_ok),
             "pullback": bool(short_pullback),
@@ -332,16 +398,17 @@ class TrendDeviationStrategy:
             "volume": bool(vol_ok),
             "band_bias": bool(band_bias_short),
             "rsi_slope": bool(short_rsi_slope),
+            "htf_confirm": bool(htf_short_ok),
         }
 
         long_score = sum(
-            [uptrend, adx_ok, long_pullback, long_momentum, vol_ok, band_bias_long]
+            [uptrend, adx_ok, long_pullback, long_momentum, vol_ok, band_bias_long, htf_long_ok]
         )
         short_score = sum(
-            [downtrend, adx_ok, short_pullback, short_momentum, vol_ok, band_bias_short]
+            [downtrend, adx_ok, short_pullback, short_momentum, vol_ok, band_bias_short, htf_short_ok]
         )
 
-        if long_score >= settings.STRATEGY_MIN_SIGNAL_SCORE and long_rsi_slope:
+        if long_score >= settings.STRATEGY_MIN_SIGNAL_SCORE and long_rsi_slope and htf_long_ok:
             return self._signal_payload(
                 df,
                 i,
@@ -352,7 +419,7 @@ class TrendDeviationStrategy:
                 regime_conf,
                 long_flags,
             )
-        if short_score >= settings.STRATEGY_MIN_SIGNAL_SCORE and short_rsi_slope:
+        if short_score >= settings.STRATEGY_MIN_SIGNAL_SCORE and short_rsi_slope and htf_short_ok:
             return self._signal_payload(
                 df,
                 i,
@@ -368,6 +435,7 @@ class TrendDeviationStrategy:
     def _evaluate_mean_reversion_signal(self, df: pd.DataFrame, i: int, regime_ctx: dict):
         curr = df.iloc[i]
         prev = df.iloc[i - 1]
+        profile = self.profile
 
         required = [
             "Close",
@@ -400,57 +468,88 @@ class TrendDeviationStrategy:
             return None
 
         zscore = (close - sma20) / std20
-        vol_ok = curr["Volume"] >= (curr["Volume_SMA20"] * settings.MEANREV_MIN_VOLUME_MULTIPLIER)
-        long_extreme = close <= lower or zscore <= -float(settings.MEANREV_ZSCORE_ENTRY)
-        short_extreme = close >= upper or zscore >= float(settings.MEANREV_ZSCORE_ENTRY)
+        vol_ok = self._volume_ok(
+            curr,
+            float(profile["mean_min_volume_mult"]),
+            bool(profile["allow_volume_bypass"]),
+        )
+        zscore_entry = float(profile["mean_zscore_entry"])
+        long_extreme = close <= lower or zscore <= -zscore_entry
+        short_extreme = close >= upper or zscore >= zscore_entry
         macd_reversal_long = curr["MACD_Hist"] >= prev["MACD_Hist"]
         macd_reversal_short = curr["MACD_Hist"] <= prev["MACD_Hist"]
         long_reversal = (
-            curr["RSI"] <= settings.MEANREV_RSI_LONG_MAX
+            curr["RSI"] <= float(profile["mean_rsi_long_max"])
             and curr["RSI"] >= prev["RSI"]
             and macd_reversal_long
         )
         short_reversal = (
-            curr["RSI"] >= settings.MEANREV_RSI_SHORT_MIN
+            curr["RSI"] >= float(profile["mean_rsi_short_min"])
             and curr["RSI"] <= prev["RSI"]
             and macd_reversal_short
         )
         long_location = close <= sma20
         short_location = close >= sma20
         low_adx = curr["ADX"] <= settings.REGIME_CHOPPY_ADX_LOW
+        htf_direction = self._higher_timeframe_direction(df, i)
+        htf_long_ok = (not settings.ENABLE_HIGHER_TIMEFRAME_CONFIRMATION) or htf_direction != "down"
+        htf_short_ok = (not settings.ENABLE_HIGHER_TIMEFRAME_CONFIRMATION) or htf_direction != "up"
 
         long_flags = {
             "strategy_mean_reversion": True,
             f"regime_{regime}": True,
+            f"security_{self.security_type}": True,
             "zscore_extreme": bool(long_extreme),
             "rsi_reversal": bool(long_reversal),
             "macd_reversal": bool(macd_reversal_long),
             "volume": bool(vol_ok),
             "below_midline": bool(long_location),
             "adx": bool(low_adx),
+            "htf_confirm": bool(htf_long_ok),
         }
         short_flags = {
             "strategy_mean_reversion": True,
             f"regime_{regime}": True,
+            f"security_{self.security_type}": True,
             "zscore_extreme": bool(short_extreme),
             "rsi_reversal": bool(short_reversal),
             "macd_reversal": bool(macd_reversal_short),
             "volume": bool(vol_ok),
             "above_midline": bool(short_location),
             "adx": bool(low_adx),
+            "htf_confirm": bool(htf_short_ok),
         }
 
-        long_core_ok = long_extreme and long_reversal and long_location and low_adx
-        short_core_ok = short_extreme and short_reversal and short_location and low_adx
+        long_core_ok = long_extreme and long_reversal and long_location and low_adx and htf_long_ok
+        short_core_ok = short_extreme and short_reversal and short_location and low_adx and htf_short_ok
 
         long_score = sum(
-            [long_extreme, long_reversal, macd_reversal_long, vol_ok, long_location, zscore < 0, low_adx]
+            [
+                long_extreme,
+                long_reversal,
+                macd_reversal_long,
+                vol_ok,
+                long_location,
+                zscore < 0,
+                low_adx,
+                htf_long_ok,
+            ]
         )
         short_score = sum(
-            [short_extreme, short_reversal, macd_reversal_short, vol_ok, short_location, zscore > 0, low_adx]
+            [
+                short_extreme,
+                short_reversal,
+                macd_reversal_short,
+                vol_ok,
+                short_location,
+                zscore > 0,
+                low_adx,
+                htf_short_ok,
+            ]
         )
+        min_score = int(profile["mean_min_signal_score"])
 
-        if long_core_ok and long_score >= settings.MEANREV_MIN_SIGNAL_SCORE:
+        if long_core_ok and long_score >= min_score:
             return self._signal_payload(
                 df,
                 i,
@@ -461,7 +560,7 @@ class TrendDeviationStrategy:
                 regime_conf,
                 long_flags,
             )
-        if short_core_ok and short_score >= settings.MEANREV_MIN_SIGNAL_SCORE:
+        if short_core_ok and short_score >= min_score:
             return self._signal_payload(
                 df,
                 i,
@@ -510,6 +609,7 @@ class TrendDeviationStrategy:
         return candidates[0]
 
     def generate_signals(self, df: pd.DataFrame) -> list[dict]:
+        self._htf_direction_cache = self._build_higher_timeframe_cache(df)
         signals: list[dict] = []
         start_i = max(1, settings.MIN_SIGNAL_WARMUP_BARS - 1)
         for i in range(start_i, len(df)):
@@ -524,6 +624,7 @@ class TrendDeviationStrategy:
 
         if len(df) < settings.MIN_SIGNAL_WARMUP_BARS:
             return None
+        self._htf_direction_cache = self._build_higher_timeframe_cache(df)
 
         if settings.USE_LAST_CLOSED_CANDLE:
             if len(df) < max(settings.MIN_SIGNAL_WARMUP_BARS, 3):

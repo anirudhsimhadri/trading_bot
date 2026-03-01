@@ -1,23 +1,28 @@
-# Trading Bot (Signals + Paper + Binance Testnet)
+# Trading Bot (ETF/Futures Optimized)
 
-This bot now includes:
-- Hybrid regime-switching strategy:
-  - Trend model in trending markets
-  - Mean reversion model in choppy/ranging markets
-  - Regime confirmation filter to avoid one-bar regime flips
-- Risk controls (daily loss cap, trade risk cap, max trades/day, cooldown, loss streak cap)
-- Multi-symbol scanner with active-symbol selection
-- Backtesting engine (for internal testing)
-- Web dashboard for monitoring + symbol switch + backtest visualization
-- Adaptive learning: symbol bias + confluence feature weights are adjusted from realized outcomes (logged in `data/learn_log.csv`).
-- Walk-forward preflight gate: execution can be blocked unless out-of-sample validation passes.
-- Realistic backtesting assumptions: spread, slippage, order latency, partial fill factor.
-- Protective exits: stop loss, take profit, trailing stop, and max-hold controls.
-- Stale-data protection + indicator warmup gate to avoid trading on incomplete/low-quality inputs.
-- Position-scaling guard (disabled by default) to avoid repeated entries while a position is already open.
+This project is now tuned primarily for:
+- US index ETFs (`SPY`, `QQQ`, `IWM`, `DIA`)
+- Index futures tickers via Yahoo (`NQ=F`, `ES=F`, `YM=F`, `RTY=F`)
 
-Optional dependency for Binance mode only:
-- `ccxt` (install with `./venv/bin/pip install ccxt`)
+This project is focused on ETF and futures workflows only.
+
+## What Changed For ETF/Futures
+
+- Instrument-aware profiles:
+  - Separate thresholds for ETFs and futures (ADX, RSI, volume, mean-reversion score).
+- Session-aware execution:
+  - ETF RTH window filter (configurable).
+  - Futures weekend + daily maintenance window filter.
+- Scheduled blackout windows:
+  - Time blocks (EST) to avoid known high-noise windows.
+- Higher timeframe confirmation:
+  - Entry direction must align with higher timeframe trend filter.
+- ATR-based protective exits:
+  - Dynamic stop-loss / take-profit / trailing distances.
+- Symbol-aware risk caps:
+  - Separate max trade risk for ETFs vs futures.
+- Backtest alignment:
+  - Backtests now respect session + blackout filters and ATR-based exits.
 
 ## One-Time Setup
 
@@ -27,24 +32,43 @@ From project root:
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 cp .env.example .env
-chmod +x run.sh install_and_run.sh
+chmod +x install_and_run.sh run.sh
 ```
 
-Or use one-command bootstrap:
+Or use:
 
 ```bash
 ./install_and_run.sh
 ```
 
-## Quick Start
+## Quick Start (Recommended)
 
-### Easiest for testing (no external accounts)
+Run the guided launcher:
 
 ```bash
-BOT_MODE=paper REQUIRE_MARKET_HOURS=false SYMBOLS=BTC-USD,ETH-USD ACTIVE_SYMBOL=BTC-USD ./venv/bin/python main.py
+./run.sh
 ```
 
-### Start dashboard
+Recommended first-run inputs:
+1. Mode: `2` (`paper`)
+2. Symbol: `SPY`
+3. Scanner symbols: `SPY,QQQ,NQ=F,ES=F`
+4. Active symbol: `SPY`
+5. Require market hours: `false`
+6. Launch dashboard: `y`
+7. Run one cycle only: `y`
+
+Then continuous run:
+
+```bash
+./run.sh
+```
+
+Use the same settings, but choose `Run one cycle only: n`.
+
+## Dashboard
+
+Start dashboard if not already launched:
 
 ```bash
 ./venv/bin/python dashboard/app.py
@@ -53,253 +77,112 @@ BOT_MODE=paper REQUIRE_MARKET_HOURS=false SYMBOLS=BTC-USD,ETH-USD ACTIVE_SYMBOL=
 Open:
 - [http://localhost:5001](http://localhost:5001)
 
-## Preflight Checklist (Run Before Live Session)
+You can:
+- Change active symbol.
+- Monitor scanner signals, model, regime, and symbol type.
+- Run backtests and walk-forward validation.
+- Track risk and paper account state.
 
-Use this quick check to avoid startup hiccups:
+## ETF/Futures Configuration
 
-1. Verify dependencies and env file:
+Main config lives in:
+- `/Users/anisimhadri/Developer/trading_bot/.env`
 
-```bash
-./install_and_run.sh
+Important sections:
+
+1. Symbols
+```env
+SYMBOLS=SPY,QQQ,NQ=F,ES=F
+ACTIVE_SYMBOL=SPY
+ETF_SYMBOLS=SPY,QQQ,IWM,DIA
+FUTURES_SYMBOLS=NQ=F,ES=F,YM=F,RTY=F
 ```
 
-2. Keep first run simple in `.env`:
-   - `BOT_MODE=paper`
-   - `REQUIRE_MARKET_HOURS=false`
-   - `TELEGRAM_TOKEN=` and `TELEGRAM_CHAT_ID=` (leave blank unless you want alerts)
-   - Optional for first validation run: `REQUIRE_BACKTEST_PASS=false`
-
-3. Use symbols Yahoo supports reliably (examples):
-   - `BTC-USD`, `ETH-USD`, `SPY`, `QQQ`, `NQ=F`
-
-4. Run one cycle smoke test:
-
-```bash
-./venv/bin/python main.py --once
+2. Session controls (EST)
+```env
+ETF_TRADE_RTH_ONLY=true
+ETF_SESSION_START_HOUR=9
+ETF_SESSION_START_MINUTE=35
+ETF_SESSION_END_HOUR=15
+ETF_SESSION_END_MINUTE=55
+FUTURES_AVOID_DAILY_MAINTENANCE=true
+FUTURES_MAINTENANCE_START_HOUR=17
+FUTURES_MAINTENANCE_END_HOUR=18
 ```
 
-5. Confirm expected terminal output:
-   - `Bot started | ...`
-   - `State file: data/runtime_state.json`
-   - `[Cycle X] ... scanned=...`
-
-6. If you see `No data found for this date range`:
-   - Switch to a different symbol from the list above.
-   - Keep `TIMEFRAME=15m` and `PERIOD=60d` for first check.
-
-7. Start dashboard and verify interaction:
-
-```bash
-./venv/bin/python dashboard/app.py
+3. Blackout windows
+```env
+ENABLE_SCHEDULED_BLACKOUTS=true
+BLACKOUT_WINDOWS_EST=09:25-09:40,09:55-10:05,13:55-14:10
+BLACKOUT_WEEKDAYS=0,1,2,3,4
 ```
 
-Open [http://localhost:5001](http://localhost:5001), then confirm scanner rows and risk panel update.
-
-8. After all checks pass, enable stricter safety back:
-   - `REQUIRE_BACKTEST_PASS=true`
-
-## Fiverr Client Experience (Recommended Flow)
-
-Use this exact flow for the easiest buyer experience:
-
-1. Open terminal in project folder.
-2. Run:
-
-```bash
-./install_and_run.sh
+4. Higher timeframe filter
+```env
+ENABLE_HIGHER_TIMEFRAME_CONFIRMATION=true
+HIGHER_TIMEFRAME_RESAMPLE_RULE=1h
+HIGHER_TIMEFRAME_MIN_BARS=220
 ```
 
-3. In prompts:
-   - Mode: `paper`
-   - Symbols: `BTC-USD,ETH-USD`
-   - Active symbol: `BTC-USD`
-   - Require market hours: `false`
-   - Launch dashboard: `y`
-   - Run one cycle only: `y` (first check)
-
-4. Confirm success:
-   - You see startup logs and cycle status in terminal.
-   - Dashboard opens at [http://localhost:5001](http://localhost:5001).
-   - Scanner table and risk panel populate.
-
-5. Start continuous run:
-
-```bash
-./run.sh
+5. ATR exits
+```env
+USE_ATR_PROTECTIVE_EXITS=true
+ATR_STOP_MULTIPLIER=1.8
+ATR_TAKE_PROFIT_MULTIPLIER=3.0
+ATR_TRAILING_MULTIPLIER=1.4
+ATR_PCT_FLOOR=0.005
+ATR_PCT_CAP=0.08
 ```
 
-Use the same settings, then select `Run one cycle only: n`.
-
-### What Buyers Can Interact With
-
-- Change active traded symbol from dashboard (`Set Active`).
-- Run backtests from dashboard (`Run Backtest`) with custom period/timeframe.
-- Run out-of-sample validation from dashboard (`Run Walk-Forward`).
-- Monitor paper account, risk controls, and live scanner state.
-
-### Minimal Buyer Setup Promise
-
-- No brokerage connection is required for `paper` mode.
-- Telegram is optional.
-- Leave `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID` blank unless you want alerts.
-- Only Python + this folder are required.
+6. Symbol-aware risk
+```env
+MAX_TRADE_RISK_PCT=1
+ETF_MAX_TRADE_RISK_PCT=1
+FUTURES_MAX_TRADE_RISK_PCT=0.7
+```
 
 ## Modes
 
 - `signals`: alerts only
-- `paper`: local paper execution (`data/paper_state.json`, `data/paper_trades.csv`)
-- `binance_testnet`: paper-money orders via Binance Spot Testnet
-- `robinhood`: signal-only workflow
-
-If Binance testnet is blocked in your region (HTTP 451), the bot can auto-fallback to local paper execution:
-
-```env
-BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=true
-```
-
-## Multi-Symbol Scanner
-
-Configure symbols in `.env`:
-
-```env
-SYMBOLS=BTC-USD,ETH-USD,SPY,NQ=F
-ACTIVE_SYMBOL=BTC-USD
-```
-
-Behavior:
-- Bot scans all symbols each cycle.
-- Bot executes trades only for `selected_symbol`.
-- `selected_symbol` can be changed from dashboard (`Set Active`).
-
-## Risk Controls
-
-Configured in `.env`:
-
-```env
-MAX_DAILY_LOSS_PCT=2
-MAX_TRADE_RISK_PCT=1
-MAX_TRADES_PER_DAY=6
-COOLDOWN_AFTER_LOSS_MINUTES=30
-MAX_CONSECUTIVE_LOSSES=3
-DATA_STALE_AFTER_MINUTES=240
-MIN_SIGNAL_WARMUP_BARS=220
-ALLOW_POSITION_SCALING=false
-STOP_LOSS_PCT=0.02
-TAKE_PROFIT_PCT=0.04
-TRAILING_STOP_PCT=0.015
-MAX_HOLD_BARS=96
-```
-
-Regime + strategy settings:
-
-```env
-ALLOW_NEUTRAL_REGIME_TRADES=false
-REGIME_LOOKBACK_BARS=24
-REGIME_CONFIRM_BARS=2
-REGIME_TREND_ADX_HIGH=22
-REGIME_CHOPPY_ADX_LOW=16
-REGIME_TREND_EMA_GAP_PCT=0.0025
-REGIME_CHOPPY_EMA_GAP_PCT=0.0012
-REGIME_TREND_BANDWIDTH_PCT=0.018
-REGIME_CHOPPY_BANDWIDTH_PCT=0.012
-MEANREV_ZSCORE_ENTRY=1.1
-MEANREV_RSI_LONG_MAX=38
-MEANREV_RSI_SHORT_MIN=62
-MEANREV_MIN_VOLUME_MULTIPLIER=0.8
-MEANREV_MIN_SIGNAL_SCORE=4
-```
-
-The bot blocks execution when limits are hit.
-Risk rationale and references are in:
-- `docs/risk_guidelines.md`
-
-Backtest gate settings:
-
-```env
-REQUIRE_BACKTEST_PASS=true
-BACKTEST_LOOKBACK_PERIOD=6mo
-BACKTEST_MIN_TRADES=20
-BACKTEST_MIN_WIN_RATE_PCT=45
-BACKTEST_MIN_PROFIT_FACTOR=1.1
-USE_WALK_FORWARD_PRECHECK=true
-WALK_FORWARD_SPLITS=4
-WALK_FORWARD_MIN_BARS_PER_SPLIT=120
-WALK_FORWARD_MIN_TRADES=8
-WALK_FORWARD_MIN_WIN_RATE_PCT=42
-WALK_FORWARD_MIN_PROFIT_FACTOR=1.05
-BACKTEST_SPREAD_BPS=2
-BACKTEST_SLIPPAGE_BPS=2
-BACKTEST_LATENCY_BARS=1
-BACKTEST_PARTIAL_FILL_PCT=1.0
-SYMBOL_LEARNING_RATE=0.2
-FEATURE_LEARNING_RATE=0.06
-FEATURE_WEIGHT_CLAMP=0.5
-```
-
-For `binance_testnet` mode, install `ccxt` first:
-
-```bash
-./venv/bin/pip install ccxt
-```
-
-If Binance returns `restricted location` errors, keep using `paper` mode or leave
-`BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=true` so the app does not crash.
-
-## Backtesting Engine (Internal Use)
-
-Dashboard:
-- Use `Run Backtest` button.
-- Shows equity curve, drawdown-aware metrics, trade table.
-
-API:
-
-```bash
-curl -X POST http://localhost:5001/api/backtest \
-  -H "Content-Type: application/json" \
-  -d '{"symbol":"BTC-USD","period":"60d","timeframe":"15m"}'
-```
-
-Walk-forward API:
-
-```bash
-curl -X POST http://localhost:5001/api/walkforward \
-  -H "Content-Type: application/json" \
-  -d '{"symbol":"BTC-USD","period":"6mo","timeframe":"15m"}'
-```
+- `paper`: local paper execution (recommended for ETF/futures testing)
+- `robinhood`: signal-only workflow (manual execution)
 
 ## Terminal Output You Should See
 
-On start:
+Startup:
 
 ```text
-Bot started | mode=paper, symbols=BTC-USD,ETH-USD, selected=BTC-USD, timeframe=15m, period=60d
+Bot started | mode=paper, symbols=SPY,QQQ,NQ=F,ES=F, selected=SPY, timeframe=15m, period=60d, execution=paper
 State file: data/runtime_state.json
 ```
 
-Each cycle:
+Cycle:
 
 ```text
-[Cycle 14] 2026-02-21T20:00:00+00:00 | scanned=2 | active_signals=1 | selected=BTC-USD
-[Cycle 14] No new signal for selected symbol (BTC-USD).
+[Cycle 12] 2026-03-01T14:30:00+00:00 | scanned=4 | active_signals=1 | selected=SPY
 ```
 
-Heartbeat:
+No signal case:
 
 ```text
-Heartbeat | cycles=24 | signals=2 | executions=1 | errors=0 | trades_today=1
+[Cycle 12] No new signal for selected symbol (SPY).
 ```
 
-## Dashboard Overview
+## Troubleshooting
 
-The dashboard shows:
-- Mode, cycles, selected symbol
-- Scanner table for all symbols (model, regime, signal, score, stale data, price)
-- Risk block (trades today, realized PnL, cooldown, loss streak)
-- Paper account snapshot
-- Backtest metrics + equity chart + trade table
-- Learning log: `data/learn_log.csv` captures signals, adjusted score, active features, and bias updates.
+1. `No data found for this date range`
+- Switch symbol (`SPY`, `QQQ`, `NQ=F`, `ES=F`)
+- Keep initial `TIMEFRAME=15m` and `PERIOD=60d`
+- Refresh dependencies: `./venv/bin/pip install -r requirements.txt`
 
-## Build Fiverr Zip
+2. Orders are blocked in session filters
+- Check `ETF_TRADE_RTH_ONLY`, futures maintenance window, and `BLACKOUT_WINDOWS_EST`
+- For testing only, set `ENABLE_SCHEDULED_BLACKOUTS=false`
+
+3. Telegram errors
+- Leave `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` blank if you do not need alerts
+
+## Build Fiverr Bundle
 
 ```bash
 ./scripts/build_release.sh
@@ -307,8 +190,3 @@ The dashboard shows:
 
 Output:
 - `release/trading_bot_bundle_<timestamp>.zip`
-
-## Notes
-
-- Backtesting is currently included for your testing phase.
-- When ready for Fiverr delivery, you can remove `backtesting/` and dashboard backtest endpoint if desired.

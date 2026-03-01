@@ -43,6 +43,12 @@ def _payload() -> dict:
         STATE_STORE.save(runtime)
 
     paper_state = _read_json(BASE_DIR / settings.STATE_DIR / "paper_state.json")
+    if isinstance(paper_state, dict) and "cash_usd" not in paper_state:
+        for key, value in paper_state.items():
+            if str(key).startswith("cash_") and isinstance(value, (int, float)):
+                paper_state["cash_usd"] = float(value)
+                break
+
     return {
         "mode": settings.BOT_MODE,
         "symbols": symbols,

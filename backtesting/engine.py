@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import sqrt
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import pytz
 
 from config import settings
 from strategy.trend_deviation import TrendDeviationStrategy
+from utils.market_time import is_in_blackout_window, is_symbol_session_open
 
 
 @dataclass
@@ -22,6 +25,19 @@ class BacktestTrade:
     pnl: float
     return_pct: float
     exit_reason: str
+
+
+EST = pytz.timezone("US/Eastern")
+
+
+def _to_est_datetime(value) -> datetime | None:
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(EST)
 
 
 def _bars_per_year(timeframe: str) -> int:
@@ -111,7 +127,7 @@ def _simulate_range(
     initial_capital: float,
 ) -> dict[str, Any]:
     fee = max(float(settings.COMMISSION_PCT), 0.0)
-    risk_pct = max(float(settings.MAX_TRADE_RISK_PCT) / 100.0, 0.0)
+    risk_pct = max(float(settings.max_trade_risk_pct_for_symbol(symbol)) / 100.0, 0.0)
     partial_fill = min(max(float(settings.BACKTEST_PARTIAL_FILL_PCT), 0.01), 1.0)
     latency_bars = max(int(settings.BACKTEST_LATENCY_BARS), 0)
     stop_loss_pct = max(float(settings.STOP_LOSS_PCT), 0.0)
@@ -122,6 +138,7 @@ def _simulate_range(
     cash = float(initial_capital)
     qty = 0.0
     entry_price = 0.0
+    entry_atr = 0.0
     entry_i: int | None = None
     high_watermark = 0.0
 
@@ -147,16 +164,26 @@ def _simulate_range(
         exit_reason: str | None = None
         if qty > 0:
             high_watermark = max(high_watermark, close_price)
-            stop_price = entry_price * (1.0 - stop_loss_pct)
-            tp_price = entry_price * (1.0 + take_profit_pct)
-            trail_price = high_watermark * (1.0 - trailing_stop_pct)
+            active_stop_pct = stop_loss_pct
+            active_tp_pct = take_profit_pct
+            active_trailing_pct = trailing_stop_pct
+            if settings.USE_ATR_PROTECTIVE_EXITS and entry_atr > 0 and entry_price > 0:
+                atr_pct = entry_atr / entry_price
+                atr_pct = max(float(settings.ATR_PCT_FLOOR), min(float(settings.ATR_PCT_CAP), atr_pct))
+                active_stop_pct = max(active_stop_pct, atr_pct * float(settings.ATR_STOP_MULTIPLIER))
+                active_tp_pct = max(active_tp_pct, atr_pct * float(settings.ATR_TAKE_PROFIT_MULTIPLIER))
+                active_trailing_pct = max(active_trailing_pct, atr_pct * float(settings.ATR_TRAILING_MULTIPLIER))
+
+            stop_price = entry_price * (1.0 - active_stop_pct)
+            tp_price = entry_price * (1.0 + active_tp_pct)
+            trail_price = high_watermark * (1.0 - active_trailing_pct)
             held_bars = (i - entry_i) if entry_i is not None else 0
 
-            if stop_loss_pct > 0 and close_price <= stop_price:
+            if active_stop_pct > 0 and close_price <= stop_price:
                 exit_reason = "stop_loss"
-            elif take_profit_pct > 0 and close_price >= tp_price:
+            elif active_tp_pct > 0 and close_price >= tp_price:
                 exit_reason = "take_profit"
-            elif trailing_stop_pct > 0 and high_watermark > entry_price and close_price <= trail_price:
+            elif active_trailing_pct > 0 and high_watermark > entry_price and close_price <= trail_price:
                 exit_reason = "trailing_stop"
             elif held_bars >= max_hold_bars:
                 exit_reason = "max_hold"
@@ -164,6 +191,16 @@ def _simulate_range(
                 exit_reason = "signal_short"
 
         if qty <= 0 and signal and signal.get("type") == "LONG":
+            bar_est = _to_est_datetime(ts)
+            session_ok, _ = is_symbol_session_open(symbol, now_est=bar_est)
+            blackout_active, _ = is_in_blackout_window(now_est=bar_est)
+            if not session_ok or blackout_active:
+                i += 1
+                equity = cash + (qty * close_price)
+                equity_curve.append(float(equity))
+                timestamps.append(str(ts))
+                continue
+
             fill_i = min(i + latency_bars, end - 1)
             fill_raw = float(df["Close"].iloc[fill_i])
             fill_price = _execution_price(fill_raw, side="buy")
@@ -175,6 +212,11 @@ def _simulate_range(
                 qty = net_allocation / fill_price
                 cash -= allocation
                 entry_price = fill_price
+                entry_atr = float(signal.get("atr", 0.0) or 0.0)
+                if entry_atr <= 0 and "ATR" in df.columns:
+                    raw_atr = df["ATR"].iloc[fill_i]
+                    if pd.notna(raw_atr):
+                        entry_atr = float(raw_atr)
                 entry_i = fill_i
                 high_watermark = fill_raw
                 i = fill_i
@@ -213,6 +255,7 @@ def _simulate_range(
             if qty <= 1e-12:
                 qty = 0.0
                 entry_price = 0.0
+                entry_atr = 0.0
                 entry_i = None
                 high_watermark = 0.0
 
@@ -247,6 +290,7 @@ def _simulate_range(
             )
         )
         qty = 0.0
+        entry_atr = 0.0
         if equity_curve:
             equity_curve[-1] = float(cash)
 

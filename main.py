@@ -6,12 +6,11 @@ from typing import Optional
 
 from backtesting.engine import run_backtest, run_walk_forward_backtest
 from config import settings
-from execution.binance_testnet import BinanceTestnetExecutor
 from execution.paper import PaperTradeExecutor
 from notifications.telegram_client import TelegramClient
 from risk.manager import RiskManager
 from strategy.trend_deviation import TrendDeviationStrategy
-from utils.market_time import is_market_open
+from utils.market_time import is_in_blackout_window, is_market_open, is_symbol_session_open
 from utils.runtime_state import RuntimeStateStore
 
 
@@ -31,6 +30,10 @@ FEATURE_KEYS = (
     "zscore_extreme",
     "rsi_reversal",
     "macd_reversal",
+    "htf_confirm",
+    "security_etf",
+    "security_futures",
+    "security_other",
     "below_midline",
     "above_midline",
 )
@@ -55,36 +58,9 @@ def build_executor():
     if settings.BOT_MODE == "paper":
         return PaperTradeExecutor(
             state_dir=settings.STATE_DIR,
-            initial_balance_usdt=settings.PAPER_INITIAL_BALANCE_USDT,
-            order_size_usdt=settings.PAPER_ORDER_SIZE_USDT,
+            initial_balance_usd=settings.PAPER_INITIAL_BALANCE_USD,
+            order_size_usd=settings.PAPER_ORDER_SIZE_USD,
         )
-
-    if settings.BOT_MODE == "binance_testnet":
-        try:
-            return BinanceTestnetExecutor(
-                api_key=settings.BINANCE_API_KEY,
-                api_secret=settings.BINANCE_API_SECRET,
-                symbol=settings.BINANCE_SYMBOL,
-                order_size_usdt=settings.BINANCE_ORDER_SIZE_USDT,
-                public_api_url=settings.BINANCE_TESTNET_PUBLIC_API,
-                private_api_url=settings.BINANCE_TESTNET_PRIVATE_API,
-            )
-        except Exception as exc:
-            if settings.BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER:
-                print(
-                    "Binance testnet unavailable. "
-                    "Falling back to local paper execution. "
-                    f"Reason: {exc}"
-                )
-                return PaperTradeExecutor(
-                    state_dir=settings.STATE_DIR,
-                    initial_balance_usdt=settings.PAPER_INITIAL_BALANCE_USDT,
-                    order_size_usdt=settings.PAPER_ORDER_SIZE_USDT,
-                )
-            raise RuntimeError(
-                "Failed to initialize binance_testnet executor. "
-                "Set BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=true to auto-fallback."
-            ) from exc
 
     raise ValueError(f"Unsupported BOT_MODE: {settings.BOT_MODE}")
 
@@ -94,8 +70,6 @@ def _executor_label(executor) -> str:
         return "none"
     if isinstance(executor, PaperTradeExecutor):
         return "paper"
-    if isinstance(executor, BinanceTestnetExecutor):
-        return "binance_testnet"
     return executor.__class__.__name__
 
 
@@ -177,6 +151,7 @@ def _sync_position_meta(
             "entry_time_utc": now_utc_iso,
             "high_watermark": float(mark_price or inferred_entry),
             "qty": asset_qty,
+            "entry_atr": 0.0,
             "inferred": True,
         }
         positions[symbol] = meta
@@ -190,6 +165,7 @@ def _sync_position_meta(
     if mark_price is not None:
         meta["high_watermark"] = max(high, float(mark_price))
     meta["qty"] = asset_qty
+    meta["entry_atr"] = float(meta.get("entry_atr", 0.0) or 0.0)
     return meta
 
 
@@ -204,20 +180,31 @@ def _build_protective_exit_signal(
 
     entry_price = float(position_meta.get("entry_price", 0.0) or 0.0)
     high_watermark = float(position_meta.get("high_watermark", 0.0) or 0.0)
+    entry_atr = float(position_meta.get("entry_atr", 0.0) or 0.0)
     if entry_price <= 0 or mark_price <= 0:
         return None
 
-    stop_price = entry_price * (1.0 - float(settings.STOP_LOSS_PCT))
-    take_profit_price = entry_price * (1.0 + float(settings.TAKE_PROFIT_PCT))
-    trailing_price = high_watermark * (1.0 - float(settings.TRAILING_STOP_PCT))
+    stop_pct = float(settings.STOP_LOSS_PCT)
+    take_profit_pct = float(settings.TAKE_PROFIT_PCT)
+    trailing_pct = float(settings.TRAILING_STOP_PCT)
+    if settings.USE_ATR_PROTECTIVE_EXITS and entry_atr > 0 and entry_price > 0:
+        atr_pct = entry_atr / entry_price
+        atr_pct = max(float(settings.ATR_PCT_FLOOR), min(float(settings.ATR_PCT_CAP), atr_pct))
+        stop_pct = max(stop_pct, atr_pct * float(settings.ATR_STOP_MULTIPLIER))
+        take_profit_pct = max(take_profit_pct, atr_pct * float(settings.ATR_TAKE_PROFIT_MULTIPLIER))
+        trailing_pct = max(trailing_pct, atr_pct * float(settings.ATR_TRAILING_MULTIPLIER))
+
+    stop_price = entry_price * (1.0 - stop_pct)
+    take_profit_price = entry_price * (1.0 + take_profit_pct)
+    trailing_price = high_watermark * (1.0 - trailing_pct)
     reason = None
 
-    if settings.STOP_LOSS_PCT > 0 and mark_price <= stop_price:
+    if stop_pct > 0 and mark_price <= stop_price:
         reason = "stop_loss"
-    elif settings.TAKE_PROFIT_PCT > 0 and mark_price >= take_profit_price:
+    elif take_profit_pct > 0 and mark_price >= take_profit_price:
         reason = "take_profit"
     elif (
-        settings.TRAILING_STOP_PCT > 0
+        trailing_pct > 0
         and high_watermark > entry_price
         and mark_price <= trailing_price
     ):
@@ -247,6 +234,7 @@ def _build_protective_exit_signal(
         "rsi": 0.0,
         "macd": 0.0,
         "adx": 0.0,
+        "atr": 0.0,
         "score": settings.STRATEGY_MIN_SIGNAL_SCORE,
         "features": [f"protective_{reason}"],
         "reason": reason,
@@ -517,7 +505,9 @@ def run_bot(run_once: bool = False) -> None:
                 runtime_state.setdefault("scanner", {})
                 selected_symbol = _get_selected_symbol(runtime_state, symbols)
 
-                market_is_open = is_market_open() if settings.REQUIRE_MARKET_HOURS else True
+                selected_security_type = settings.get_security_type(selected_symbol)
+                enforce_market_clock = settings.REQUIRE_MARKET_HOURS and selected_security_type != "futures"
+                market_is_open = is_market_open() if enforce_market_clock else True
                 if not market_is_open:
                     print(f"[Cycle {cycle}] {cycle_time} | Market closed. Waiting for next cycle...")
                     state_store.save(runtime_state)
@@ -530,6 +520,7 @@ def run_bot(run_once: bool = False) -> None:
                 selected_price = None
                 selected_stale = None
                 active_signals = 0
+                symbols_with_data = 0
 
                 for symbol in symbols:
                     strategy = strategies[symbol]
@@ -537,6 +528,7 @@ def run_bot(run_once: bool = False) -> None:
 
                     scan_row = {
                         "symbol": symbol,
+                        "security_type": settings.get_security_type(symbol),
                         "updated_at_utc": cycle_time,
                         "data_rows": int(len(df)),
                         "signal": None,
@@ -549,6 +541,7 @@ def run_bot(run_once: bool = False) -> None:
                     }
 
                     if not df.empty:
+                        symbols_with_data += 1
                         price = float(df["Close"].iloc[-1])
                         scan_row["last_close"] = price
                         scan_row["stale_minutes"] = _staleness_minutes(df)
@@ -571,6 +564,18 @@ def run_bot(run_once: bool = False) -> None:
                     f"[Cycle {cycle}] {cycle_time} | scanned={len(symbols)} | "
                     f"active_signals={active_signals} | selected={selected_symbol}"
                 )
+                if symbols_with_data == 0:
+                    reason = (
+                        "No market data available for scanner symbols. "
+                        "Check internet access, symbol list, and data provider availability."
+                    )
+                    runtime_state["last_error"] = reason
+                    print(f"[Cycle {cycle}] {reason}")
+                    state_store.save(runtime_state)
+                    if run_once:
+                        return
+                    time.sleep(settings.CHECK_INTERVAL_SECONDS)
+                    continue
 
                 selected_snapshot = _executor_snapshot(executor, selected_price)
                 selected_position_meta = _sync_position_meta(
@@ -602,6 +607,27 @@ def run_bot(run_once: bool = False) -> None:
                             return
                         time.sleep(settings.CHECK_INTERVAL_SECONDS)
                         continue
+                    if not is_protective:
+                        session_ok, session_reason = is_symbol_session_open(selected_symbol)
+                        if not session_ok:
+                            reason = session_reason or "Session filter blocked execution."
+                            print(f"[Cycle {cycle}] Execution blocked: {reason}")
+                            runtime_state.setdefault("risk", {})["blocked_reason"] = reason
+                            state_store.save(runtime_state)
+                            if run_once:
+                                return
+                            time.sleep(settings.CHECK_INTERVAL_SECONDS)
+                            continue
+                        blackout_active, blackout_reason = is_in_blackout_window()
+                        if blackout_active:
+                            reason = blackout_reason or "Scheduled blackout filter blocked execution."
+                            print(f"[Cycle {cycle}] Execution blocked: {reason}")
+                            runtime_state.setdefault("risk", {})["blocked_reason"] = reason
+                            state_store.save(runtime_state)
+                            if run_once:
+                                return
+                            time.sleep(settings.CHECK_INTERVAL_SECONDS)
+                            continue
 
                     signal_features = _signal_features(trade_signal)
                     bias_before = _get_bias(runtime_state, selected_symbol)
@@ -665,27 +691,27 @@ def run_bot(run_once: bool = False) -> None:
                                 runtime_state.setdefault("risk", {})["blocked_reason"] = position_block_reason
                             elif can_trade or close_position:
                                 runtime_state.setdefault("risk", {})["blocked_reason"] = None
-                                base_order_size = (
-                                    settings.BINANCE_ORDER_SIZE_USDT
-                                    if settings.BOT_MODE == "binance_testnet"
-                                    else settings.PAPER_ORDER_SIZE_USDT
-                                )
+                                base_order_size = settings.PAPER_ORDER_SIZE_USD
                                 order_size = (
                                     None
                                     if close_position
-                                    else risk_manager.suggested_order_notional(equity, base_order_size)
+                                    else risk_manager.suggested_order_notional(
+                                        equity,
+                                        base_order_size,
+                                        symbol=selected_symbol,
+                                    )
                                 )
                                 try:
                                     try:
                                         exec_result = executor.execute_signal(
                                             trade_signal,
-                                            order_size_usdt=order_size,
+                                            order_size_usd=order_size,
                                             close_position=close_position,
                                         )
                                     except TypeError:
                                         exec_result = executor.execute_signal(
                                             trade_signal,
-                                            order_size_usdt=order_size,
+                                            order_size_usd=order_size,
                                         )
                                 except Exception as exec_exc:
                                     exec_result = {
@@ -713,6 +739,7 @@ def run_bot(run_once: bool = False) -> None:
                                             "entry_time_utc": cycle_time,
                                             "high_watermark": float(exec_result.get("price", selected_price or 0.0)),
                                             "qty": float(exec_result.get("qty", 0.0)),
+                                            "entry_atr": float(trade_signal.get("atr", 0.0) or 0.0),
                                             "inferred": False,
                                         }
                                     elif trade_signal["type"] == "SHORT":

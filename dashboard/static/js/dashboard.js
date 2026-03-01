@@ -31,6 +31,7 @@ function renderScanner(scanner, selectedSymbol) {
     if (sym === selectedSymbol) tr.style.background = "rgba(22,195,160,0.12)";
 
     const signal = row.signal || "—";
+    const securityType = row.security_type || "other";
     const model = row.strategy || "—";
     const regime = row.regime
       ? `${row.regime} (${num(row.regime_confidence, 2)})`
@@ -46,6 +47,7 @@ function renderScanner(scanner, selectedSymbol) {
     const signalColor = signal === "LONG" ? "positive" : signal === "SHORT" ? "negative" : "";
     tr.innerHTML = `
       <td>${sym}</td>
+      <td>${securityType}</td>
       <td>${model}</td>
       <td>${regime}</td>
       <td class="${signalColor}">${signal}</td>
@@ -80,7 +82,7 @@ function renderStats(payload) {
   document.getElementById("risk-trade-risk").innerHTML = `Risk Per Trade: <strong>${num(riskCfg.MAX_TRADE_RISK_PCT, 2)}%</strong>`;
 
   const paper = payload.paper_state || {};
-  document.getElementById("paper-cash").textContent = num(paper.cash_usdt, 2);
+  document.getElementById("paper-cash").textContent = num(paper.cash_usd, 2);
   document.getElementById("paper-asset").textContent = num(paper.asset_qty, 6);
   document.getElementById("paper-entry").textContent = num(paper.avg_entry_price, 2);
   document.getElementById("paper-realized").textContent = num(paper.realized_pnl_total, 2);

@@ -65,40 +65,30 @@ is_yes() {
   esac
 }
 
-is_empty_or_yes() {
-  case "$1" in
-    ""|[Yy]|[Yy][Ee][Ss]) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 echo "Select mode:"
 echo "  1) signals (alerts only)"
 echo "  2) paper (local paper account)"
-echo "  3) binance_testnet (paper-money exchange)"
-echo "  4) robinhood (signal workflow)"
-read -r -p "Enter choice [1-4] (default: 1): " mode_choice
+echo "  3) robinhood (signal workflow)"
+read -r -p "Enter choice [1-3] (default: 1): " mode_choice
 mode_choice="${mode_choice:-1}"
 
 case "$mode_choice" in
   1)
     BOT_MODE="signals"
-    DEFAULT_SYMBOL="NQ=F"
-    DEFAULT_MARKET_HOURS="true"
+    DEFAULT_SYMBOL="SPY"
+    DEFAULT_SYMBOLS="SPY,QQQ,NQ=F,ES=F"
+    DEFAULT_MARKET_HOURS="false"
     ;;
   2)
     BOT_MODE="paper"
-    DEFAULT_SYMBOL="BTC-USD"
+    DEFAULT_SYMBOL="SPY"
+    DEFAULT_SYMBOLS="SPY,QQQ,NQ=F,ES=F"
     DEFAULT_MARKET_HOURS="false"
     ;;
   3)
-    BOT_MODE="binance_testnet"
-    DEFAULT_SYMBOL="BTC-USD"
-    DEFAULT_MARKET_HOURS="false"
-    ;;
-  4)
     BOT_MODE="robinhood"
-    DEFAULT_SYMBOL="BTC-USD"
+    DEFAULT_SYMBOL="SPY"
+    DEFAULT_SYMBOLS="SPY,QQQ,NQ=F,ES=F"
     DEFAULT_MARKET_HOURS="false"
     ;;
   *)
@@ -113,11 +103,21 @@ current_active_symbol="$(read_env_var "ACTIVE_SYMBOL")"
 current_market_hours="$(read_env_var "REQUIRE_MARKET_HOURS")"
 current_interval="$(read_env_var "CHECK_INTERVAL_SECONDS")"
 
-read -r -p "Data symbol for signals (default: ${current_symbol:-$DEFAULT_SYMBOL}): " user_symbol
+if [[ -z "$current_symbol" ]]; then
+  current_symbol="$DEFAULT_SYMBOL"
+fi
+if [[ -z "$current_symbols" ]]; then
+  current_symbols="$DEFAULT_SYMBOLS"
+fi
+if [[ -z "$current_active_symbol" ]]; then
+  current_active_symbol="$DEFAULT_SYMBOL"
+fi
+
+read -r -p "Data symbol (ETF/Futures recommended) (default: ${current_symbol:-$DEFAULT_SYMBOL}): " user_symbol
 user_symbol="${user_symbol:-${current_symbol:-$DEFAULT_SYMBOL}}"
 
-read -r -p "Scanner symbols (comma-separated, default: ${current_symbols:-$user_symbol}): " user_symbols
-user_symbols="${user_symbols:-${current_symbols:-$user_symbol}}"
+read -r -p "Scanner symbols (comma-separated, default: ${current_symbols:-$DEFAULT_SYMBOLS}): " user_symbols
+user_symbols="${user_symbols:-${current_symbols:-$DEFAULT_SYMBOLS}}"
 
 read -r -p "Active symbol to trade (default: ${current_active_symbol:-$user_symbol}): " user_active_symbol
 user_active_symbol="${user_active_symbol:-${current_active_symbol:-$user_symbol}}"
@@ -136,62 +136,12 @@ set_env_var "REQUIRE_MARKET_HOURS" "$user_market_hours"
 set_env_var "CHECK_INTERVAL_SECONDS" "$user_interval"
 
 if [[ "$BOT_MODE" == "paper" ]]; then
-  current_paper_balance="$(read_env_var "PAPER_INITIAL_BALANCE_USDT")"
-  current_paper_size="$(read_env_var "PAPER_ORDER_SIZE_USDT")"
-  read -r -p "Paper initial balance USDT (default: ${current_paper_balance:-10000}): " paper_balance
-  read -r -p "Paper order size USDT (default: ${current_paper_size:-250}): " paper_size
-  set_env_var "PAPER_INITIAL_BALANCE_USDT" "${paper_balance:-${current_paper_balance:-10000}}"
-  set_env_var "PAPER_ORDER_SIZE_USDT" "${paper_size:-${current_paper_size:-250}}"
-fi
-
-if [[ "$BOT_MODE" == "binance_testnet" ]]; then
-  fallback_setting="$(read_env_var "BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER")"
-  if [[ -z "$fallback_setting" ]]; then
-    set_env_var "BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER" "true"
-    fallback_setting="true"
-  fi
-  fallback_setting_normalized="$(printf '%s' "$fallback_setting" | tr '[:upper:]' '[:lower:]')"
-
-  if ! "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
-import ccxt
-PY
-  then
-    if [[ "$fallback_setting_normalized" == "true" ]]; then
-      echo "ccxt is not installed. Continuing with Binance mode + auto-fallback to paper."
-    else
-      read -r -p "ccxt is required for Binance mode. Install it now? [Y/n]: " install_ccxt_choice
-      if is_empty_or_yes "${install_ccxt_choice}"; then
-        ./venv/bin/pip install ccxt
-      else
-        echo "Cannot continue in binance_testnet mode without ccxt when fallback is disabled."
-        exit 1
-      fi
-    fi
-  fi
-
-  current_binance_symbol="$(read_env_var "BINANCE_SYMBOL")"
-  current_binance_size="$(read_env_var "BINANCE_ORDER_SIZE_USDT")"
-  current_binance_key="$(read_env_var "BINANCE_API_KEY")"
-  current_binance_secret="$(read_env_var "BINANCE_API_SECRET")"
-
-  read -r -p "Binance symbol (default: ${current_binance_symbol:-BTC/USDT}): " binance_symbol
-  read -r -p "Binance order size USDT (default: ${current_binance_size:-50}): " binance_size
-  read -r -p "Binance API key (leave blank to keep existing): " binance_key
-  read -r -p "Binance API secret (leave blank to keep existing): " binance_secret
-
-  set_env_var "BINANCE_SYMBOL" "${binance_symbol:-${current_binance_symbol:-BTC/USDT}}"
-  set_env_var "BINANCE_ORDER_SIZE_USDT" "${binance_size:-${current_binance_size:-50}}"
-  set_env_var "BINANCE_API_KEY" "${binance_key:-$current_binance_key}"
-  set_env_var "BINANCE_API_SECRET" "${binance_secret:-$current_binance_secret}"
-
-  final_key="$(read_env_var "BINANCE_API_KEY")"
-  final_secret="$(read_env_var "BINANCE_API_SECRET")"
-  if [[ -z "$final_key" || -z "$final_secret" ]]; then
-    echo "BINANCE_API_KEY and BINANCE_API_SECRET are required for binance_testnet mode."
-    exit 1
-  fi
-
-  echo "Binance fallback setting: BINANCE_TESTNET_AUTO_FALLBACK_TO_PAPER=${fallback_setting}"
+  current_paper_balance="$(read_env_var "PAPER_INITIAL_BALANCE_USD")"
+  current_paper_size="$(read_env_var "PAPER_ORDER_SIZE_USD")"
+  read -r -p "Paper initial balance USD (default: ${current_paper_balance:-10000}): " paper_balance
+  read -r -p "Paper order size USD (default: ${current_paper_size:-250}): " paper_size
+  set_env_var "PAPER_INITIAL_BALANCE_USD" "${paper_balance:-${current_paper_balance:-10000}}"
+  set_env_var "PAPER_ORDER_SIZE_USD" "${paper_size:-${current_paper_size:-250}}"
 fi
 
 current_tg_token="$(read_env_var "TELEGRAM_TOKEN")"

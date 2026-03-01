@@ -1,6 +1,7 @@
 from ta.trend import MACD, EMAIndicator, ADXIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
+import numpy as np
 import pandas as pd
 
 
@@ -16,47 +17,53 @@ class TechnicalIndicators:
         if df.empty or "Close" not in df.columns:
             return df
 
-        # Calculate RSI
-        rsi = RSIIndicator(close=df["Close"], window=rsi_period)
-        df["RSI"] = rsi.rsi()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            # Calculate RSI
+            rsi = RSIIndicator(close=df["Close"], window=rsi_period)
+            df["RSI"] = rsi.rsi()
 
-        # Calculate MACD
-        macd = MACD(
-            close=df["Close"],
-            window_slow=macd_slow,
-            window_fast=macd_fast,
-            window_sign=macd_signal,
-        )
-        df["MACD"] = macd.macd()
-        df["MACD_Signal"] = macd.macd_signal()
-        df["MACD_Hist"] = macd.macd_diff()
-        df["MACD_Cross_Up"] = (df["MACD"] > df["MACD_Signal"]) & (df["MACD"].shift(1) <= df["MACD_Signal"].shift(1))
-        df["MACD_Cross_Down"] = (df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1))
+            # Calculate MACD
+            macd = MACD(
+                close=df["Close"],
+                window_slow=macd_slow,
+                window_fast=macd_fast,
+                window_sign=macd_signal,
+            )
+            df["MACD"] = macd.macd()
+            df["MACD_Signal"] = macd.macd_signal()
+            df["MACD_Hist"] = macd.macd_diff()
+            df["MACD_Cross_Up"] = (df["MACD"] > df["MACD_Signal"]) & (df["MACD"].shift(1) <= df["MACD_Signal"].shift(1))
+            df["MACD_Cross_Down"] = (df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1))
 
-        # Trend regime
-        df["EMA20"] = EMAIndicator(close=df["Close"], window=20).ema_indicator()
-        df["EMA50"] = EMAIndicator(close=df["Close"], window=50).ema_indicator()
-        df["EMA200"] = EMAIndicator(close=df["Close"], window=200).ema_indicator()
+            # Trend regime
+            df["EMA20"] = EMAIndicator(close=df["Close"], window=20).ema_indicator()
+            df["EMA50"] = EMAIndicator(close=df["Close"], window=50).ema_indicator()
+            df["EMA200"] = EMAIndicator(close=df["Close"], window=200).ema_indicator()
 
-        # Strength and volatility filters
-        if {"High", "Low", "Close"}.issubset(df.columns):
-            adx = ADXIndicator(high=df["High"], low=df["Low"], close=df["Close"], window=14)
-            atr = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14)
-            df["ADX"] = adx.adx()
-            df["ATR"] = atr.average_true_range()
-        else:
-            df["ADX"] = float("nan")
-            df["ATR"] = float("nan")
+            # Strength and volatility filters
+            if {"High", "Low", "Close"}.issubset(df.columns):
+                adx = ADXIndicator(high=df["High"], low=df["Low"], close=df["Close"], window=14)
+                atr = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14)
+                df["ADX"] = adx.adx()
+                df["ATR"] = atr.average_true_range()
+            else:
+                df["ADX"] = float("nan")
+                df["ATR"] = float("nan")
 
-        # Volume confirmation
-        if "Volume" in df.columns:
-            df["Volume_SMA20"] = df["Volume"].rolling(window=20).mean()
-        else:
-            df["Volume_SMA20"] = float("nan")
+            # Volume confirmation
+            if "Volume" in df.columns:
+                df["Volume_SMA20"] = df["Volume"].rolling(window=20).mean()
+            else:
+                df["Volume_SMA20"] = float("nan")
 
-        # Calculate trend deviations
-        df["SMA20"] = df["Close"].rolling(window=20).mean()
-        df["STD20"] = df["Close"].rolling(window=20).std()
-        df["Upper_Band"] = df["SMA20"] + (df["STD20"] * 2)
-        df["Lower_Band"] = df["SMA20"] - (df["STD20"] * 2)
+            # Calculate trend deviations
+            df["SMA20"] = df["Close"].rolling(window=20).mean()
+            df["STD20"] = df["Close"].rolling(window=20).std()
+            df["Upper_Band"] = df["SMA20"] + (df["STD20"] * 2)
+            df["Lower_Band"] = df["SMA20"] - (df["STD20"] * 2)
+
+        numeric_cols = ["RSI", "MACD", "MACD_Signal", "MACD_Hist", "EMA20", "EMA50", "EMA200", "ADX", "ATR", "SMA20", "STD20", "Upper_Band", "Lower_Band", "Volume_SMA20"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
         return df
